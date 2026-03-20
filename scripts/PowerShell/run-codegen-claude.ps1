@@ -106,6 +106,32 @@ function Invoke-Claude {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: Configure Claude's allowed write directories for a target directory.
+#   Ensures the .claude/claude.json exists and allows writes to the target.
+# ---------------------------------------------------------------------------
+function Set-ClaudeWritePermissions {
+    param(
+        [string]$TargetDir
+    )
+
+    $claudeConfigDir = Join-Path $TargetDir ".claude"
+    $claudeJsonPath = Join-Path $claudeConfigDir "claude.json"
+
+    # Ensure .claude directory exists
+    New-Item -ItemType Directory -Force -Path $claudeConfigDir | Out-Null
+
+    # Create or update claude.json with allowed_write_directories
+    # Using absolute path for target directory to allow Claude to write there
+    $claudeConfig = @{
+        "allowed_write_directories" = @(
+            (Resolve-Path $TargetDir | Select-Object -ExpandProperty Path)
+        )
+    }
+
+    $claudeConfig | ConvertTo-Json | Set-Content -Path $claudeJsonPath -Encoding UTF8
+}
+
+# ---------------------------------------------------------------------------
 # Helper: Install the securable plugin into a target directory.
 #   Copies .claude/, CLAUDE.md, skills/, and data/ from the cloned plugin repo.
 # ---------------------------------------------------------------------------
@@ -272,6 +298,12 @@ foreach ($langKey in $Languages.Keys) {
         }
 
         $label = "$langKey / $mode"
+        
+        # Ensure Claude has write permissions to the target directory (skip in dry-run)
+        if (-not $DryRun) {
+            Set-ClaudeWritePermissions -TargetDir $targetDir
+        }
+        
         Invoke-Claude -WorkingDir $targetDir -Prompt $prompt -Label $label
     }
 }

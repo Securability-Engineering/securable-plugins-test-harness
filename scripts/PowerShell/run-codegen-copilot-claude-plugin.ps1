@@ -95,6 +95,29 @@ function Assert-Tool([string]$Name) {
     Write-Host "  [OK] $Name found: $((Get-Command $Name).Source)" -ForegroundColor DarkGreen
 }
 
+function Set-CopilotWritePermissions {
+    param(
+        [string]$TargetDir,
+        [string[]]$AllowedDirs
+    )
+
+    $claudeDir = Join-Path $TargetDir ".claude"
+    $claudeJsonPath = Join-Path $claudeDir "claude.json"
+
+    New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+
+    $resolvedAllowedDirs = @()
+    foreach ($dir in $AllowedDirs) {
+        $resolvedAllowedDirs += (Resolve-Path $dir | Select-Object -ExpandProperty Path)
+    }
+
+    $config = @{
+        allowed_write_directories = $resolvedAllowedDirs
+    }
+
+    $config | ConvertTo-Json -Depth 5 | Set-Content -Path $claudeJsonPath -Encoding UTF8
+}
+
 # ---------------------------------------------------------------------------
 # Helper: Run Copilot CLI agent non-interactively in a given directory.
 #
@@ -132,12 +155,23 @@ function Invoke-CopilotAgent {
 
     Push-Location $WorkingDir
     try {
-        # Newer Copilot CLI versions use top-level -p for non-interactive runs.
-        copilot -p $Prompt --allow-all 2>&1 |
-            Tee-Object -FilePath $logFile
+        # Copilot CLI no longer supports --prompt-file. Persist prompt to a temp file,
+        # read it back as a single raw string, and pass it via -p safely.
+        $promptFile = Join-Path $env:TEMP "copilot_prompt_$([System.IO.Path]::GetRandomFileName()).txt"
+        try {
+            Set-Content -Path $promptFile -Value $Prompt -Encoding UTF8
+            $promptFromFile = Get-Content -Path $promptFile -Raw -Encoding UTF8
 
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "copilot -p exited with code $LASTEXITCODE for $Label - check $logFile"
+            $copilotArgs = @("-p", $promptFromFile, "--allow-all", "--no-alt-screen")
+            & copilot @copilotArgs 2>&1 |
+                Tee-Object -FilePath $logFile
+
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "copilot -p exited with code $LASTEXITCODE for $Label - check $logFile"
+            }
+        }
+        finally {
+            if (Test-Path $promptFile) { Remove-Item -Force $promptFile }
         }
     }
     finally {
@@ -272,6 +306,13 @@ if (Test-Path $PluginTemp) {
 
 $SecurableInstructions = Get-SecurableInstructions $PluginTemp
 
+$AllTargetDirs = @()
+foreach ($lang in $Languages.Keys) {
+    foreach ($m in @("rawdog", "securable")) {
+        $AllTargetDirs += (Join-Path $OutputDir "$lang\$m")
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Step 2: Loop over languages x modes
 # ---------------------------------------------------------------------------
@@ -356,6 +397,11 @@ foreach ($langKey in $Languages.Keys) {
         }
 
         $label = "$langKey / $mode"
+
+        if (-not $DryRun) {
+            Set-CopilotWritePermissions -TargetDir $targetDir -AllowedDirs $AllTargetDirs
+        }
+
         Invoke-CopilotAgent -WorkingDir $targetDir -Prompt $prompt -Label $label
     }
 }
