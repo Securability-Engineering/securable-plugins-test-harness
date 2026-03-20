@@ -31,8 +31,8 @@
     Useful for verifying setup before spending tokens.
 
 .EXAMPLE
-    .\run-codegen.ps1 -PrdFile .\my-prd.md
-    .\run-codegen.ps1 -PrdFile .\my-prd.md -OutputDir C:\Projects\codegen -DryRun
+    .\run-codegen-claude.ps1 -PrdFile .\my-prd.md
+    .\run-codegen-claude.ps1 -PrdFile .\my-prd.md -OutputDir C:\Projects\codegen -DryRun
 #>
 
 [CmdletBinding()]
@@ -69,9 +69,9 @@ function Write-Step([string]$Message, [string]$Color = "Cyan") {
 }
 
 # ---------------------------------------------------------------------------
-# Helper: Run claude non-interactively in a given directory
+# Helper: Run claude non-interactively in a given directory.
 #   Claude Code CLI: claude --print  (alias: claude -p)
-#   The prompt is passed via stdin so we avoid command-line quoting hell.
+#   The prompt is passed via stdin to avoid command-line quoting issues.
 # ---------------------------------------------------------------------------
 function Invoke-Claude {
     param(
@@ -97,7 +97,7 @@ function Invoke-Claude {
         # Pipe the prompt via stdin; --print keeps Claude non-interactive
         $Prompt | claude --print 2>&1 | Tee-Object -FilePath $logFile
         if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Claude exited with code $LASTEXITCODE for $Label — check $logFile"
+            Write-Warning "Claude exited with code $LASTEXITCODE for $Label - check $logFile"
         }
     }
     finally {
@@ -106,8 +106,8 @@ function Invoke-Claude {
 }
 
 # ---------------------------------------------------------------------------
-# Helper: Install the securable plugin into a target directory
-#   Copies .claude/ dir and CLAUDE.md from the cloned plugin repo.
+# Helper: Install the securable plugin into a target directory.
+#   Copies .claude/, CLAUDE.md, skills/, and data/ from the cloned plugin repo.
 # ---------------------------------------------------------------------------
 function Install-SecurablePlugin {
     param(
@@ -115,29 +115,28 @@ function Install-SecurablePlugin {
         [string]$TargetDir       # project directory to install into
     )
 
-    $claudeDir   = Join-Path $PluginSource ".claude"
-    $claudeMd    = Join-Path $PluginSource "CLAUDE.md"
-    $skillsDir   = Join-Path $PluginSource "skills"
-    $dataDir     = Join-Path $PluginSource "data"
+    $claudeDir = Join-Path $PluginSource ".claude"
+    $claudeMd  = Join-Path $PluginSource "CLAUDE.md"
+    $skillsDir = Join-Path $PluginSource "skills"
+    $dataDir   = Join-Path $PluginSource "data"
 
     if (Test-Path $claudeDir) {
-        Copy-Item -Recurse -Force $claudeDir  (Join-Path $TargetDir ".claude")
+        Copy-Item -Recurse -Force $claudeDir (Join-Path $TargetDir ".claude")
     }
     if (Test-Path $claudeMd) {
         Copy-Item -Force $claudeMd (Join-Path $TargetDir "CLAUDE.md")
     }
-    # skills/ and data/ are referenced by the plugin's commands
     if (Test-Path $skillsDir) {
-        Copy-Item -Recurse -Force $skillsDir  (Join-Path $TargetDir "skills")
+        Copy-Item -Recurse -Force $skillsDir (Join-Path $TargetDir "skills")
     }
     if (Test-Path $dataDir) {
-        Copy-Item -Recurse -Force $dataDir    (Join-Path $TargetDir "data")
+        Copy-Item -Recurse -Force $dataDir (Join-Path $TargetDir "data")
     }
 }
 
 # ---------------------------------------------------------------------------
 # Helper: Read the /secure-generate command definition so we can embed it
-#   directly in the prompt — this makes it work reliably in --print mode
+#   directly in the prompt. This makes it work reliably in --print mode
 #   where slash commands may not be dispatched automatically.
 # ---------------------------------------------------------------------------
 function Get-SecureGenerateInstructions([string]$PluginSource) {
@@ -146,13 +145,13 @@ function Get-SecureGenerateInstructions([string]$PluginSource) {
         return Get-Content $cmdFile -Raw
     }
     # Fallback if file not found
-    return @"
-Apply FIASSE/SSEM securability engineering principles as hard constraints
-while generating the code. Ensure the output scores well across the nine
-SSEM attributes: Analyzability, Modifiability, Testability, Confidentiality,
-Accountability, Authenticity, Availability, Integrity, and Resilience.
-Use the /secure-generate approach from the securable-claude-plugin.
-"@
+    return @(
+        "Apply FIASSE/SSEM securability engineering principles as hard constraints",
+        "while generating the code. Ensure the output scores well across the nine",
+        "SSEM attributes: Analyzability, Modifiability, Testability, Confidentiality,",
+        "Accountability, Authenticity, Availability, Integrity, and Resilience.",
+        "Use the /secure-generate approach from the securable-claude-plugin."
+    ) -join "`n"
 }
 
 # ===========================================================================
@@ -180,7 +179,7 @@ New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $PluginTemp = Join-Path $OutputDir "_plugin_temp"
 
 if (Test-Path $PluginTemp) {
-    Write-Step "Plugin already cloned at $PluginTemp — skipping clone" "Yellow"
+    Write-Step "Plugin already cloned at $PluginTemp - skipping clone" "Yellow"
 } else {
     Write-Step "Cloning securable-claude-plugin ..."
     if ($DryRun) {
@@ -208,44 +207,68 @@ foreach ($langKey in $Languages.Keys) {
     foreach ($mode in @("rawdog", "securable")) {
 
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
+
+        # Isolation: wipe any prior run so generation starts from a clean slate.
+        # This prevents the AI from treating leftover files as existing project context.
+        if (Test-Path $targetDir) {
+            if ($DryRun) {
+                Write-Host "  [DRY-RUN] Would wipe existing: $targetDir" -ForegroundColor Yellow
+            } else {
+                Write-Host "  Cleaning previous run: $targetDir" -ForegroundColor DarkGray
+                Remove-Item -Recurse -Force $targetDir
+            }
+        }
         New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+
+        # Isolation: place a minimal CLAUDE.md in rawdog directories as a context
+        # fence. Claude Code stops its upward directory walk when it finds a
+        # CLAUDE.md, preventing any plugin files in parent directories from
+        # bleeding into the plain baseline run.
+        if ($mode -eq "rawdog") {
+            $fenceContent = @(
+                "# codegen-test: rawdog baseline",
+                "# This file exists only to prevent context from parent directories",
+                "# being loaded into this isolated test run.  Do not add instructions here."
+            ) -join "`n"
+            Set-Content (Join-Path $targetDir "CLAUDE.md") $fenceContent
+        }
 
         # ---- Build the prompt ----
         if ($mode -eq "rawdog") {
-            $prompt = @"
-Generate a complete, working $langLabel project based on the following PRD.
-
-Create all necessary files, configuration, and folder structure.
-Include a README.md with setup and run instructions.
-
-PRD:
----
-$PrdContent
----
-"@
+            $prompt = @(
+                "Generate a complete, working $langLabel project based on the following PRD.",
+                "",
+                "Create all necessary files, configuration, and folder structure.",
+                "Include a README.md with setup and run instructions.",
+                "",
+                "PRD:",
+                "---",
+                $PrdContent,
+                "---"
+            ) -join "`n"
         } else {
-            # securable: install plugin files then invoke /secure-generate
+            # securable: install plugin files then embed /secure-generate instructions
             Install-SecurablePlugin -PluginSource $PluginTemp -TargetDir $targetDir
 
-            $prompt = @"
-You are operating with the securable-claude-plugin active (CLAUDE.md and
-.claude/commands/ are present in this directory).
-
-Apply the following /secure-generate instructions as your primary constraints:
-
-$SecureInstructions
-
-Now generate a complete, working $langLabel project based on the following PRD,
-ensuring all FIASSE/SSEM securability attributes are applied throughout.
-
-Create all necessary files, configuration, and folder structure.
-Include a README.md with setup, run instructions, and a brief SSEM score summary.
-
-PRD:
----
-$PrdContent
----
-"@
+            $prompt = @(
+                "You are operating with the securable-claude-plugin active (CLAUDE.md and",
+                ".claude/commands/ are present in this directory).",
+                "",
+                "Apply the following /secure-generate instructions as your primary constraints:",
+                "",
+                $SecureInstructions,
+                "",
+                "Now generate a complete, working $langLabel project based on the following PRD,",
+                "ensuring all FIASSE/SSEM securability attributes are applied throughout.",
+                "",
+                "Create all necessary files, configuration, and folder structure.",
+                "Include a README.md with setup, run instructions, and a brief SSEM score summary.",
+                "",
+                "PRD:",
+                "---",
+                $PrdContent,
+                "---"
+            ) -join "`n"
         }
 
         $label = "$langKey / $mode"

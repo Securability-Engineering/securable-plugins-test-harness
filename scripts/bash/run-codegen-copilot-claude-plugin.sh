@@ -279,7 +279,35 @@ for lang_key in "${LANG_KEYS[@]}"; do
 
     for mode in rawdog securable; do
         target_dir="$OUTPUT_DIR/$lang_key/$mode"
+
+        # ------------------------------------------------------------------
+        # Isolation: remove any prior run output so generation always starts
+        # from a clean, empty directory.  This prevents the AI from seeing
+        # leftover files from a previous run as project context.
+        # ------------------------------------------------------------------
+        if [[ -d "$target_dir" ]]; then
+            if [[ "$DRY_RUN" == true ]]; then
+                _yellow "  [DRY-RUN] Would wipe existing: $target_dir"
+            else
+                _gray "  Cleaning previous run: $target_dir"
+                rm -rf "$target_dir"
+            fi
+        fi
         mkdir -p "$target_dir"
+
+        # ------------------------------------------------------------------
+        # Isolation: install an empty CLAUDE.md into rawdog directories as a
+        # context fence.  Both Claude Code and Copilot CLI stop their upward
+        # directory walk when they find a CLAUDE.md, so this prevents plugin
+        # files in any parent directory from bleeding into the plain run.
+        # ------------------------------------------------------------------
+        if [[ "$mode" == "rawdog" ]]; then
+            cat > "$target_dir/CLAUDE.md" <<'FENCE'
+# codegen-test: rawdog baseline
+# This file exists only to prevent context from parent directories
+# being loaded into this isolated test run.  Do not add instructions here.
+FENCE
+        fi
 
         if [[ "$mode" == "rawdog" ]]; then
             cat > "$PROMPT_TMP" <<PROMPT

@@ -5,8 +5,8 @@
     each with a "rawdog" (plain) and "securable" (FIASSE plugin) variant.
 
 .DESCRIPTION
-    Mirrors the structure produced by run-codegen.ps1 (Claude Code), and uses the
-    SAME plugin — securable-claude-plugin — for both tools.  Copilot CLI's skill
+    Mirrors the structure produced by run-codegen-claude.ps1, and uses the
+    same plugin - securable-claude-plugin - for both tools. Copilot CLI's skill
     discovery path includes <project>/.claude/skills/, so the plugin's layout is
     natively compatible with both Claude Code and Copilot CLI.
 
@@ -26,22 +26,22 @@
         The script clones securable-claude-plugin once, then copies CLAUDE.md,
         .claude/, skills/, and data/ into each securable target directory.
         Copilot CLI auto-discovers .claude/skills/ and reads CLAUDE.md as project
-        context.  The /secure-generate command definition is also embedded inline
+        context. The /secure-generate command definition is also embedded inline
         in the prompt for reliability in headless (--yes) mode.
 
     Copilot CLI invocation:
         copilot agent run --prompt-file <file> --yes
         (--yes suppresses interactive confirmations; the agent writes files
-         directly into the current working directory)
+        directly into the current working directory)
 
 .PARAMETER PrdFile
-    Path to your PRD markdown or text file.  Required.
+    Path to your PRD markdown or text file. Required.
 
 .PARAMETER OutputDir
-    Root folder for all generated output.  Defaults to .\copilot-codegen-output
+    Root folder for all generated output. Defaults to .\copilot-codegen-output
 
 .PARAMETER PluginRepo
-    URL of the securable-claude-plugin repo.  Defaults to the canonical repo.
+    URL of the securable-claude-plugin repo. Defaults to the canonical repo.
     Copilot CLI honours .claude/skills/ from the project directory (same
     discovery path as Claude Code), so the claude plugin works for both tools.
 
@@ -49,8 +49,8 @@
     Print the commands that would run without executing Copilot CLI.
 
 .EXAMPLE
-    .\run-codegen-copilot.ps1 -PrdFile .\my-prd.md
-    .\run-codegen-copilot.ps1 -PrdFile .\my-prd.md -OutputDir D:\tests\copilot -DryRun
+    .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md
+    .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md -OutputDir D:\tests\copilot -DryRun
 #>
 
 [CmdletBinding()]
@@ -90,7 +90,7 @@ function Write-Step([string]$Message, [string]$Color = "Cyan") {
 # ---------------------------------------------------------------------------
 function Assert-Tool([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        throw "Required tool '$Name' not found on PATH.  Please install it and try again."
+        throw "Required tool '$Name' not found on PATH. Please install it and try again."
     }
     Write-Host "  [OK] $Name found: $((Get-Command $Name).Source)" -ForegroundColor DarkGreen
 }
@@ -99,14 +99,17 @@ function Assert-Tool([string]$Name) {
 # Helper: Run Copilot CLI agent non-interactively in a given directory.
 #
 #   GitHub Copilot CLI non-interactive invocation:
-#     copilot agent run --prompt "..." --yes
+#     copilot agent run --prompt-file <file> --yes
 #
-#   --yes       suppress all interactive confirmations
-#   The agent writes generated files directly into the working directory,
-#   so we Push-Location into the target folder first.
+#   --yes suppresses all interactive confirmations. The agent writes files
+#   directly into the working directory, so we Push-Location into the
+#   target folder first.
 #
-#   Copilot CLI discovers .github/copilot-instructions.md automatically
-#   from the current working directory — no extra flags needed.
+#   Copilot CLI discovers .claude/skills/ automatically from the current
+#   working directory - no extra flags needed.
+#
+#   If your version of copilot CLI uses a different flag for supplying the
+#   prompt, update the copilot invocation line in this function.
 # ---------------------------------------------------------------------------
 function Invoke-CopilotAgent {
     param(
@@ -127,22 +130,18 @@ function Invoke-CopilotAgent {
     Write-Host "  Output dir : $WorkingDir"
     Write-Host "  Log file   : $logFile"
 
-    # Write the prompt to a temp file to avoid any shell quoting issues
-    # with multi-line strings on Windows.
+    # Write prompt to a temp file to avoid shell quoting issues with multi-line strings
     $promptFile = Join-Path $env:TEMP "copilot_prompt_$([System.IO.Path]::GetRandomFileName()).txt"
     try {
         Set-Content -Path $promptFile -Value $Prompt -Encoding UTF8
 
         Push-Location $WorkingDir
         try {
-            # copilot agent run reads the prompt from a file via --prompt-file,
-            # or from stdin.  We use --prompt-file for maximum compatibility.
-            # If your version of copilot CLI uses a different flag, adjust here.
             copilot agent run --prompt-file $promptFile --yes 2>&1 |
                 Tee-Object -FilePath $logFile
 
             if ($LASTEXITCODE -ne 0) {
-                Write-Warning "copilot agent run exited with code $LASTEXITCODE for $Label — check $logFile"
+                Write-Warning "copilot agent run exited with code $LASTEXITCODE for $Label - check $logFile"
             }
         }
         finally {
@@ -162,10 +161,10 @@ function Invoke-CopilotAgent {
 #   automatically by Copilot CLI too.
 #
 #   Copied assets:
-#     .claude/      — commands and settings (slash-command definitions)
-#     CLAUDE.md     — plugin entry point; Copilot CLI reads this as project context
-#     skills/       — SSEM skill definitions (auto-discovered by both CLIs)
-#     data/         — FIASSE RFC reference sections used by skills
+#     .claude/   - commands and settings (slash-command definitions)
+#     CLAUDE.md  - plugin entry point; Copilot CLI reads this as project context
+#     skills/    - SSEM skill definitions (auto-discovered by both CLIs)
+#     data/      - FIASSE RFC reference sections used by skills
 # ---------------------------------------------------------------------------
 function Install-SecurableCopilotPlugin {
     param(
@@ -193,11 +192,11 @@ function Install-SecurableCopilotPlugin {
 # ---------------------------------------------------------------------------
 # Helper: Read plugin instructions from the securable-claude-plugin layout.
 #
-#   Primary source : CLAUDE.md         (plugin entry point)
+#   Primary source : CLAUDE.md
 #   Slash command  : .claude/commands/secure-generate.md
-#                    (embedded verbatim so Copilot CLI gets the full intent
-#                     even in headless mode where slash commands aren't
-#                     dispatched interactively)
+#                    Embedded verbatim so Copilot CLI gets the full intent
+#                    even in headless mode where slash commands are not
+#                    dispatched interactively.
 # ---------------------------------------------------------------------------
 function Get-SecurableInstructions([string]$PluginSource) {
     $parts = [System.Collections.Generic.List[string]]::new()
@@ -217,17 +216,17 @@ function Get-SecurableInstructions([string]$PluginSource) {
     }
 
     # Fallback if repo layout differs
-    return @"
-Apply FIASSE/SSEM securability engineering principles as hard constraints.
-Satisfy all nine SSEM attributes:
-  Maintainability: Analyzability, Modifiability, Testability
-  Trustworthiness: Confidentiality, Accountability, Authenticity
-  Reliability:     Availability, Integrity, Resilience
-Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all
-trust boundaries.  Enforce the Derived Integrity Principle for business-critical
-values.  Produce structured audit logging for all accountable actions.
-Use the /secure-generate approach from the securable-claude-plugin.
-"@
+    return @(
+        "Apply FIASSE/SSEM securability engineering principles as hard constraints.",
+        "Satisfy all nine SSEM attributes:",
+        "  Maintainability: Analyzability, Modifiability, Testability",
+        "  Trustworthiness: Confidentiality, Accountability, Authenticity",
+        "  Reliability:     Availability, Integrity, Resilience",
+        "Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all",
+        "trust boundaries. Enforce the Derived Integrity Principle for business-critical",
+        "values. Produce structured audit logging for all accountable actions.",
+        "Use the /secure-generate approach from the securable-claude-plugin."
+    ) -join "`n"
 }
 
 # ===========================================================================
@@ -265,7 +264,7 @@ New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $PluginTemp = Join-Path $OutputDir "_securable_claude_plugin_temp"
 
 if (Test-Path $PluginTemp) {
-    Write-Step "Plugin already cloned at $PluginTemp — skipping clone" "Yellow"
+    Write-Step "Plugin already cloned at $PluginTemp - skipping clone" "Yellow"
 } else {
     Write-Step "Cloning securable-claude-plugin ..."
     if ($DryRun) {
@@ -274,8 +273,8 @@ if (Test-Path $PluginTemp) {
         New-Item -ItemType Directory -Force -Path (Join-Path $PluginTemp ".claude\commands") | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $PluginTemp "skills") | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $PluginTemp "data")   | Out-Null
-        Set-Content (Join-Path $PluginTemp "CLAUDE.md")                              "# securable-claude-plugin stub (dry-run)"
-        Set-Content (Join-Path $PluginTemp ".claude\commands\secure-generate.md")   "# secure-generate stub (dry-run)"
+        Set-Content (Join-Path $PluginTemp "CLAUDE.md")                            "# securable-claude-plugin stub (dry-run)"
+        Set-Content (Join-Path $PluginTemp ".claude\commands\secure-generate.md") "# secure-generate stub (dry-run)"
     } else {
         git clone $PluginRepo $PluginTemp
         if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
@@ -293,53 +292,78 @@ foreach ($langKey in $Languages.Keys) {
     foreach ($mode in @("rawdog", "securable")) {
 
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
+
+        # Isolation: wipe any prior run so generation starts from a clean slate.
+        # This prevents the AI from treating leftover files as existing project context.
+        if (Test-Path $targetDir) {
+            if ($DryRun) {
+                Write-Host "  [DRY-RUN] Would wipe existing: $targetDir" -ForegroundColor Yellow
+            } else {
+                Write-Host "  Cleaning previous run: $targetDir" -ForegroundColor DarkGray
+                Remove-Item -Recurse -Force $targetDir
+            }
+        }
         New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+
+        # Isolation: place a minimal CLAUDE.md in rawdog directories as a context
+        # fence. Both Claude Code and Copilot CLI stop their upward directory walk
+        # when they find a CLAUDE.md, preventing plugin files in parent directories
+        # from bleeding into the plain baseline run.
+        if ($mode -eq "rawdog") {
+            $fenceContent = @(
+                "# codegen-test: rawdog baseline",
+                "# This file exists only to prevent context from parent directories",
+                "# being loaded into this isolated test run.  Do not add instructions here."
+            ) -join "`n"
+            Set-Content (Join-Path $targetDir "CLAUDE.md") $fenceContent
+        }
 
         # ---- Build the prompt ----
         if ($mode -eq "rawdog") {
-            $prompt = @"
-Generate a complete, working $langLabel project based on the following PRD.
-
-Create all necessary source files, configuration files, and folder structure
-inside the current working directory.
-
-Include a README.md with setup and run instructions.
-
-PRD:
----
-$PrdContent
----
-"@
+            $prompt = @(
+                "Generate a complete, working $langLabel project based on the following PRD.",
+                "",
+                "Create all necessary source files, configuration files, and folder structure",
+                "inside the current working directory.",
+                "",
+                "Include a README.md with setup and run instructions.",
+                "",
+                "PRD:",
+                "---",
+                $PrdContent,
+                "---"
+            ) -join "`n"
         } else {
             # Install plugin files first so Copilot CLI auto-loads them
             Install-SecurableCopilotPlugin -PluginSource $PluginTemp -TargetDir $targetDir
 
-            $prompt = @"
-You are operating with the securable-copilot FIASSE plugin active.
-The following securability engineering instructions and prompts are your
-primary constraints — treat them as non-negotiable design requirements,
-not optional guidelines.
-
-=== SECURABLE-COPILOT PLUGIN INSTRUCTIONS ===
-$SecurableInstructions
-=== END PLUGIN INSTRUCTIONS ===
-
-Now generate a complete, working $langLabel project based on the following PRD,
-applying every FIASSE/SSEM constraint above throughout all generated code.
-
-Create all necessary source files, configuration files, and folder structure
-inside the current working directory.
-
-Include a README.md with:
-  - Setup and run instructions
-  - A brief SSEM attribute coverage summary describing how each of the nine
-    attributes is addressed in the generated code
-
-PRD:
----
-$PrdContent
----
-"@
+            $prompt = @(
+                "You are operating with the securable-claude-plugin active (CLAUDE.md and",
+                ".claude/commands/ are present in this directory).",
+                "",
+                "The following securability engineering instructions are your primary",
+                "constraints - treat them as non-negotiable design requirements.",
+                "",
+                "=== SECURABLE-CLAUDE-PLUGIN INSTRUCTIONS ===",
+                $SecurableInstructions,
+                "=== END PLUGIN INSTRUCTIONS ===",
+                "",
+                "Now generate a complete, working $langLabel project based on the following PRD,",
+                "applying every FIASSE/SSEM constraint above throughout all generated code.",
+                "",
+                "Create all necessary source files, configuration files, and folder structure",
+                "inside the current working directory.",
+                "",
+                "Include a README.md with:",
+                "  - Setup and run instructions",
+                "  - A brief SSEM attribute coverage summary describing how each of the nine",
+                "    attributes is addressed in the generated code",
+                "",
+                "PRD:",
+                "---",
+                $PrdContent,
+                "---"
+            ) -join "`n"
         }
 
         $label = "$langKey / $mode"
@@ -363,8 +387,8 @@ Write-Host ""
 Write-Host "Each folder contains a copilot-output.log with the full CLI response." -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "NOTE: If 'copilot agent run --prompt-file' is not available in your" -ForegroundColor DarkYellow
-Write-Host "      version of the CLI, see the PROMPT FLAG COMPATIBILITY note in" -ForegroundColor DarkYellow
-Write-Host "      the script comments and update Invoke-CopilotAgent accordingly." -ForegroundColor DarkYellow
+Write-Host "      version of the CLI, check 'copilot agent run --help' and update" -ForegroundColor DarkYellow
+Write-Host "      the Invoke-CopilotAgent function in this script accordingly." -ForegroundColor DarkYellow
 
 if ($DryRun) {
     Write-Host "`n[DRY-RUN MODE] No Copilot calls were made." -ForegroundColor Yellow
