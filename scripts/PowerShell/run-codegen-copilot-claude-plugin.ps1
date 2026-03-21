@@ -48,6 +48,10 @@
 .PARAMETER DryRun
     Print the commands that would run without executing Copilot CLI.
 
+.PARAMETER Resume
+    Resume a previous run without wiping existing target directories.
+    Useful when token windows or rate limits interrupt generation.
+
 .EXAMPLE
     .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md
     .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md -OutputDir D:\tests\copilot -DryRun
@@ -63,7 +67,9 @@ param(
 
     [string]$PluginRepo = "https://github.com/Xcaciv/securable-claude-plugin.git",
 
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [switch]$Resume
 )
 
 Set-StrictMode -Version Latest
@@ -263,6 +269,7 @@ Write-Step "Starting Copilot CLI codegen run (securable-claude-plugin)" "Magenta
 Write-Host "  PRD file   : $PrdFile"
 Write-Host "  Output dir : $OutputDir"
 Write-Host "  Dry run    : $DryRun"
+Write-Host "  Resume     : $Resume"
 
 # ---------------------------------------------------------------------------
 # Prerequisite check
@@ -323,14 +330,22 @@ foreach ($langKey in $Languages.Keys) {
 
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
 
-        # Isolation: wipe any prior run so generation starts from a clean slate.
-        # This prevents the AI from treating leftover files as existing project context.
+        # By default, wipe prior output so generation starts from a clean slate.
+        # In -Resume mode, preserve existing content to continue interrupted runs.
         if (Test-Path $targetDir) {
-            if ($DryRun) {
-                Write-Host "  [DRY-RUN] Would wipe existing: $targetDir" -ForegroundColor Yellow
+            if ($Resume) {
+                if ($DryRun) {
+                    Write-Host "  [DRY-RUN] Would keep existing (resume mode): $targetDir" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  Resume mode: keeping existing directory: $targetDir" -ForegroundColor DarkGray
+                }
             } else {
-                Write-Host "  Cleaning previous run: $targetDir" -ForegroundColor DarkGray
-                Remove-Item -Recurse -Force $targetDir
+                if ($DryRun) {
+                    Write-Host "  [DRY-RUN] Would wipe existing: $targetDir" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  Cleaning previous run: $targetDir" -ForegroundColor DarkGray
+                    Remove-Item -Recurse -Force $targetDir
+                }
             }
         }
         New-Item -ItemType Directory -Force -Path $targetDir | Out-Null

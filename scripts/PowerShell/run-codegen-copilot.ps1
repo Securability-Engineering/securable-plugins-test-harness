@@ -31,6 +31,10 @@
 
 .PARAMETER DryRun
     Print the commands that would run without executing Copilot CLI.
+
+.PARAMETER Resume
+    Resume a previous run without wiping existing target directories.
+    Useful when token windows or rate limits interrupt generation.
 #>
 
 [CmdletBinding()]
@@ -43,7 +47,9 @@ param(
 
     [string]$PluginRepo = "https://github.com/Xcaciv/securable-copilot.git",
 
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [switch]$Resume
 )
 
 Set-StrictMode -Version Latest
@@ -194,6 +200,7 @@ Write-Step "Starting Copilot CLI codegen run" "Magenta"
 Write-Host "  PRD file   : $PrdFile"
 Write-Host "  Output dir : $OutputDir"
 Write-Host "  Dry run    : $DryRun"
+Write-Host "  Resume     : $Resume"
 
 Write-Step "Checking prerequisites ..."
 if (-not $DryRun) {
@@ -236,6 +243,24 @@ foreach ($langKey in $Languages.Keys) {
 
     foreach ($mode in @("rawdog", "securable")) {
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
+
+        if (Test-Path $targetDir) {
+            if ($Resume) {
+                if ($DryRun) {
+                    Write-Host "  [DRY-RUN] Would keep existing (resume mode): $targetDir" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  Resume mode: keeping existing directory: $targetDir" -ForegroundColor DarkGray
+                }
+            } else {
+                if ($DryRun) {
+                    Write-Host "  [DRY-RUN] Would wipe existing: $targetDir" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  Cleaning previous run: $targetDir" -ForegroundColor DarkGray
+                    Remove-Item -Recurse -Force $targetDir
+                }
+            }
+        }
+
         New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 
         if ($mode -eq "rawdog") {
