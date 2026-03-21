@@ -61,6 +61,8 @@ $Languages = [ordered]@{
     "node"   = "Node.js web application using Express.js"
 }
 
+$FinishedFlagFileName = ".codegen-finished"
+
 function Write-Step([string]$Message, [string]$Color = "Cyan") {
     Write-Host "`n>>> $Message" -ForegroundColor $Color
 }
@@ -243,6 +245,16 @@ foreach ($langKey in $Languages.Keys) {
 
     foreach ($mode in @("rawdog", "securable")) {
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
+        $finishedFlagPath = Join-Path $targetDir $FinishedFlagFileName
+
+        if (Test-Path $finishedFlagPath) {
+            if ($DryRun) {
+                Write-Host "  [DRY-RUN] Would skip completed variation: $targetDir" -ForegroundColor Yellow
+            } else {
+                Write-Host "  Skipping completed variation: $targetDir" -ForegroundColor DarkGreen
+            }
+            continue
+        }
 
         if (Test-Path $targetDir) {
             if ($Resume) {
@@ -271,6 +283,8 @@ foreach ($langKey in $Languages.Keys) {
                 "inside the current working directory.",
                 "",
                 "Include a README.md with setup and run instructions.",
+                "When the project is fully complete, create a file named $FinishedFlagFileName in the",
+                "current working directory. Only create this file after all required project files are done.",
                 "",
                 "PRD:",
                 "---",
@@ -300,6 +314,8 @@ foreach ($langKey in $Languages.Keys) {
                 "  - Setup and run instructions",
                 "  - A brief SSEM attribute coverage summary describing how each of the nine",
                 "    attributes is addressed in the generated code",
+                "When the project is fully complete, create a file named $FinishedFlagFileName in the",
+                "current working directory. Only create this file after all required project files are done.",
                 "",
                 "PRD:",
                 "---",
