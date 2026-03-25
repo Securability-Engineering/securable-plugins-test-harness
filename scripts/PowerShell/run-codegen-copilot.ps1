@@ -35,11 +35,20 @@
 .PARAMETER Resume
     Resume a previous run without wiping existing target directories.
     Useful when token windows or rate limits interrupt generation.
+
+.PARAMETER Clean
+    Remove the cached plugin clone and .codegen-finished flags from
+    the output directory, then exit.  No generation is performed.
+    -PrdFile is not required when -Clean is specified.
+
+.EXAMPLE
+    .\run-codegen-copilot.ps1 -PrdFile .\my-prd.md
+    .\run-codegen-copilot.ps1 -OutputDir D:\tests\copilot -Clean
 #>
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')]
     [ValidateScript({ Test-Path $_ -PathType Leaf })]
     [string]$PrdFile,
 
@@ -49,7 +58,10 @@ param(
 
     [switch]$DryRun,
 
-    [switch]$Resume
+    [switch]$Resume,
+
+    [Parameter(ParameterSetName = 'Clean')]
+    [switch]$Clean
 )
 
 Set-StrictMode -Version Latest
@@ -204,8 +216,37 @@ function Get-SecurableInstructions([string]$PluginSource) {
     ) -join "`n"
 }
 
-$PrdFile = Resolve-Path $PrdFile | Select-Object -ExpandProperty Path
 $OutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir)
+
+# ---------------------------------------------------------------------------
+# -Clean: remove cached plugin clone and finished flags, then exit
+# ---------------------------------------------------------------------------
+if ($Clean) {
+    Write-Step "Cleaning cache files from $OutputDir" "Magenta"
+
+    $PluginTemp = Join-Path $OutputDir "_securable_copilot_temp"
+    if (Test-Path $PluginTemp) {
+        Write-Host "  Removing plugin cache: $PluginTemp" -ForegroundColor Yellow
+        Remove-Item -Recurse -Force $PluginTemp
+    } else {
+        Write-Host "  Plugin cache not found (already clean)" -ForegroundColor DarkGray
+    }
+
+    $flagsRemoved = 0
+    if (Test-Path $OutputDir) {
+        Get-ChildItem -Path $OutputDir -Filter $FinishedFlagFileName -Recurse -Force | ForEach-Object {
+            Write-Host "  Removing finished flag: $($_.FullName)" -ForegroundColor Yellow
+            Remove-Item -Force $_.FullName
+            $flagsRemoved++
+        }
+    }
+    Write-Host "  Removed $flagsRemoved finished flag(s)." -ForegroundColor DarkGray
+
+    Write-Step "Clean complete." "Magenta"
+    return
+}
+
+$PrdFile = Resolve-Path $PrdFile | Select-Object -ExpandProperty Path
 
 Write-Step "Starting Copilot CLI codegen run" "Magenta"
 Write-Host "  PRD file   : $PrdFile"
@@ -256,7 +297,7 @@ foreach ($langKey in $Languages.Keys) {
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
         $finishedFlagPath = Join-Path $targetDir $FinishedFlagFileName
 
-        if (Test-Path $finishedFlagPath) {
+        if ($Resume -and (Test-Path $finishedFlagPath)) {
             if ($DryRun) {
                 Write-Host "  [DRY-RUN] Would skip completed variation: $targetDir" -ForegroundColor Yellow
             } else {
