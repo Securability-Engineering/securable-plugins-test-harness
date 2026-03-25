@@ -305,6 +305,8 @@ When `DryRun` is active, the script MUST:
 | bash | `claude` | `securable-claude-plugin` | `bash/run-codegen-claude.sh` | Implemented (missing `Resume`, `Clean`, `[finished_flag_file]`) |
 | bash | `copilot` | `securable-claude-plugin` | `bash/run-codegen-copilot-claude-plugin.sh` | Implemented (missing `Resume`, `Clean`, `[finished_flag_file]`) |
 | bash | `copilot` | `securable-copilot` | `bash/run-codegen-copilot.sh` | Not yet created |
+| PowerShell | `opencode` | `securable-opencode-module` | `PowerShell/run-codegen-opencode.ps1` | Implemented |
+| bash | `opencode` | `securable-opencode-module` | `bash/run-codegen-opencode.sh` | Not yet created |
 
 ---
 
