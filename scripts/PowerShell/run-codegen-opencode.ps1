@@ -203,7 +203,7 @@ function Invoke-OpenCode {
             $previousErrorActionPreference = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                & cmd /c "opencode run < $promptFile" 2>&1 |
+                & cmd /c "opencode run < $promptFile" |
                     Tee-Object -FilePath $logFile
             }
             finally {
