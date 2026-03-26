@@ -96,6 +96,20 @@ function Write-Step([string]$Message, [string]$Color = "Cyan") {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: Write text as UTF-8 without BOM (PowerShell 5.1 safe)
+#   OpenCode rejects BOM-prefixed JSON/JSONC files.
+# ---------------------------------------------------------------------------
+function Write-Utf8NoBomFile {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
+# ---------------------------------------------------------------------------
 # Helper: Verify required tools are present
 # ---------------------------------------------------------------------------
 function Assert-Tool([string]$Name) {
@@ -129,7 +143,7 @@ function Set-OpenCodePermissions {
         $existing = Get-Content $configPath -Raw | ConvertFrom-Json
         # Add permission block
         $existing | Add-Member -NotePropertyName "permission" -NotePropertyValue @{ "edit" = "allow"; "bash" = "allow" } -Force
-        $existing | ConvertTo-Json -Depth 10 | Set-Content -Path $configPath -Encoding UTF8
+        Write-Utf8NoBomFile -Path $configPath -Content ($existing | ConvertTo-Json -Depth 10)
     } else {
         $config = @{
             "`$schema"   = "https://opencode.ai/config.json"
@@ -138,7 +152,7 @@ function Set-OpenCodePermissions {
                 "bash" = "allow"
             }
         }
-        $config | ConvertTo-Json -Depth 10 | Set-Content -Path $configPath -Encoding UTF8
+        Write-Utf8NoBomFile -Path $configPath -Content ($config | ConvertTo-Json -Depth 10)
     }
 }
 
@@ -189,7 +203,7 @@ function Invoke-OpenCode {
             $previousErrorActionPreference = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                & opencode run -f $promptFile 2>&1 |
+                & cmd /c "opencode run < $promptFile" 2>&1 |
                     Tee-Object -FilePath $logFile
             }
             finally {
@@ -282,7 +296,7 @@ function Install-SecurableModule {
     }
 
     $configPath = Join-Path $TargetDir "opencode.json"
-    $opencodeConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $configPath -Encoding UTF8
+    Write-Utf8NoBomFile -Path $configPath -Content ($opencodeConfig | ConvertTo-Json -Depth 10)
     Write-Host "  Wrote opencode.json -> $configPath" -ForegroundColor DarkGray
 }
 

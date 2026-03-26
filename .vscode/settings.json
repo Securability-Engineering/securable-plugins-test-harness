@@ -1,5 +1,7 @@
 {
-    "chat.tools.terminal.autoApprove": {
-        ".\\run-codegen-claude.ps1": true
-    }
+    "cSpell.words": [
+        "aspnet",
+        "codegen",
+        "rawdog"
+    ]
 }

@@ -8,15 +8,36 @@ function Invoke-ExternalAgent {
         [Alias("Args")]
         [string[]]$ArgumentList,
 
+        [string]$WorkingDirectory,
+
         [string]$LogFile = "agent-output.log"
     )
 
-    # Normalize arguments
-    $argsString = switch ($ArgumentList) {
-        $null { "" }
-        { $_ -is [string] } { $_ }
-        { $_ -is [array] } { $_ -join " " }
-        default { $_.ToString() }
+    # Normalize arguments to a single string
+    $argsString = if ($ArgumentList) { $ArgumentList -join " " } else { "" }
+
+    # Resolve command to an executable that CreateProcess can launch.
+    # PowerShell's Get-Command may return .ps1 or .bat/.cmd shims that
+    # System.Diagnostics.Process (UseShellExecute=false) cannot start directly.
+    $resolved = Get-Command $Command -ErrorAction SilentlyContinue
+    if ($resolved) {
+        $src = $resolved.Source
+        $ext = [System.IO.Path]::GetExtension($src).ToLowerInvariant()
+        switch ($ext) {
+            '.ps1' {
+                # Launch via the current PowerShell host
+                $pwsh = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
+                $argsString = "-NoProfile -ExecutionPolicy Bypass -File `"$src`" $argsString"
+                $Command = $pwsh
+            }
+            { $_ -in '.bat', '.cmd' } {
+                $argsString = "/c `"$src`" $argsString"
+                $Command = "cmd.exe"
+            }
+            default {
+                $Command = $src   # use fully-qualified path
+            }
+        }
     }
 
     Write-Host "Executing command: $Command $argsString"
@@ -25,6 +46,9 @@ function Invoke-ExternalAgent {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Command
     $psi.Arguments = $argsString
+    if ($WorkingDirectory) {
+        $psi.WorkingDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WorkingDirectory)
+    }
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError  = $true
     $psi.UseShellExecute = $false
@@ -42,19 +66,19 @@ function Invoke-ExternalAgent {
 
     # Handlers — both streams write to the same log
     $proc.add_OutputDataReceived({
-        param($sender, $args)
-        if ($args.Data) {
-            Write-Host $args.Data
-            $logWriter.WriteLine((Add-Timestamp $args.Data "OUT"))
+        param($sender, $eventArgs)
+        if ($eventArgs.Data) {
+            Write-Host $eventArgs.Data
+            $logWriter.WriteLine((Add-Timestamp $eventArgs.Data "OUT"))
             $logWriter.Flush()
         }
     })
 
     $proc.add_ErrorDataReceived({
-        param($sender, $args)
-        if ($args.Data) {
-            Write-Host $args.Data -ForegroundColor Red
-            $logWriter.WriteLine((Add-Timestamp $args.Data "ERR"))
+        param($sender, $eventArgs)
+        if ($eventArgs.Data) {
+            Write-Host $eventArgs.Data -ForegroundColor Red
+            $logWriter.WriteLine((Add-Timestamp $eventArgs.Data "ERR"))
             $logWriter.Flush()
         }
     })
@@ -65,6 +89,8 @@ function Invoke-ExternalAgent {
     $proc.WaitForExit()
 
     $logWriter.Close()
+
+    Write-Host "Command exited with code $($proc.ExitCode)"
 
     return $proc.ExitCode
 }

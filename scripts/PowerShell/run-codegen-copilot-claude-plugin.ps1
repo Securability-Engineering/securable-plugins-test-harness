@@ -174,7 +174,8 @@ function Invoke-CopilotAgent {
     try {
         # Persist prompt to a temp file and pass the file path via -p.
         $promptFile = Join-Path $env:TEMP "copilot_prompt_$([System.IO.Path]::GetRandomFileName()).txt"
-        Write-Host "  Running in $WorkingDir using temp prompt file: $promptFile" -ForegroundColor DarkGray
+        Write-Host "  Running in $WorkingDir"
+        Write-Host "  using temp prompt file: $promptFile" -ForegroundColor DarkGray
         try {
             Set-Content -Path $promptFile -Value $Prompt -Encoding UTF8
 
@@ -187,7 +188,8 @@ function Invoke-CopilotAgent {
             $previousErrorActionPreference = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                Invoke-ExternalAgent -Command "copilot" -ArgumentList @copilotArgs -LogFile $logFile
+                & cmd /c "copilot " @copilotArgs |
+                    Tee-Object -FilePath $logFile
             }
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference
@@ -241,7 +243,7 @@ function Install-SecurableCopilotPlugin {
     # plugin's top-level skills/ directory into that path so the CLI finds them.
     $skillsSrc = Join-Path $PluginSource "skills"
     if (Test-Path $skillsSrc) {
-        $skillsDst = Join-Path $TargetDir ".claude" "skills"
+           $skillsDst = Join-Path (Join-Path $TargetDir ".claude") "skills"
         New-Item -ItemType Directory -Force -Path $skillsDst | Out-Null
         Copy-Item -Recurse -Force (Join-Path $skillsSrc "*") $skillsDst
         Write-Host "  Installed skills/ -> $skillsDst" -ForegroundColor DarkGray
