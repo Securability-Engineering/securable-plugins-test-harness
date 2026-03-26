@@ -62,7 +62,6 @@
     .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md -OutputDir D:\tests\copilot -DryRun
     .\run-codegen-copilot-claude-plugin.ps1 -OutputDir D:\tests\copilot -Clean
 #>
-
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
     [Parameter(Mandatory = $true, ParameterSetName = 'Run')]
@@ -81,6 +80,7 @@ param(
     [switch]$Clean
 )
 
+Import-Module (Join-Path $PSScriptRoot "ExternalAgentTools\ExternalAgentTools.psm1")
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -125,7 +125,7 @@ function Set-CopilotWritePermissions {
 
     $resolvedAllowedDirs = @()
     foreach ($dir in $AllowedDirs) {
-        $resolvedAllowedDirs += (Resolve-Path $dir | Select-Object -ExpandProperty Path)
+        $resolvedAllowedDirs += $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($dir)
     }
 
     $config = @{
@@ -187,7 +187,7 @@ function Invoke-CopilotAgent {
             $previousErrorActionPreference = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                copilot @copilotArgs 2>&1 | Tee-Object -FilePath $logFile
+                Invoke-ExternalAgent -Command "copilot" -ArgumentList @copilotArgs -LogFile $logFile
             }
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference
