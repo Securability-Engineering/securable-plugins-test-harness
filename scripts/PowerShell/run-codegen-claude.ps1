@@ -34,6 +34,15 @@
     Resume a previous run without wiping existing target directories.
     Useful when Claude rate limits or token windows interrupt generation.
 
+.PARAMETER Modes
+        One or more generation modes to run.
+        Defaults to both: rawdog,securable
+        Supported modes:
+            - rawdog   : plain generation
+            - securable: generation with securable-claude-plugin constraints
+            - fiassed  : securable generation plus PRD enhancement via the
+                                     prd-fiasse-asvs-enhancement play before prompting
+
 .PARAMETER Clean
     Remove the cached plugin clone and .codegen-finished flags from
     the output directory, then exit.  No generation is performed.
@@ -42,6 +51,7 @@
 .EXAMPLE
     .\run-codegen-claude.ps1 -PrdFile .\my-prd.md
     .\run-codegen-claude.ps1 -PrdFile .\my-prd.md -OutputDir C:\Projects\codegen -DryRun
+    .\run-codegen-claude.ps1 -PrdFile .\my-prd.md -Modes fiassed
     .\run-codegen-claude.ps1 -PrdFile .\my-prd.md -Resume
     .\run-codegen-claude.ps1 -OutputDir C:\Projects\codegen -Clean
 #>
@@ -60,6 +70,9 @@ param(
 
     [switch]$Resume,
 
+    [ValidateCount(1, 32)]
+    [string[]]$Modes = @("rawdog", "securable"),
+
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
 )
@@ -75,6 +88,45 @@ $Languages = [ordered]@{
     "aspnet" = "ASP.NET Core (C#) Web API / MVC application"
     "jsp"    = "Java web application using JSP (Java Server Pages) and servlets"
     "node"   = "Node.js web application using Express.js"
+}
+
+$ModeDefinitions = [ordered]@{
+    "rawdog" = @{
+        IsSecurable  = $false
+        IsFiassed    = $false
+        SummaryLabel = "plain generation"
+    }
+    "securable" = @{
+        IsSecurable  = $true
+        IsFiassed    = $false
+        SummaryLabel = "FIASSE/SSEM secured generation"
+    }
+    "fiassed" = @{
+        IsSecurable  = $true
+        IsFiassed    = $true
+        SummaryLabel = "FIASSE/SSEM secured generation with PRD play enhancement"
+    }
+}
+
+$SupportedModes = @($ModeDefinitions.Keys)
+$NormalizedModes = [System.Collections.Generic.List[string]]::new()
+foreach ($modeArg in $Modes) {
+    foreach ($candidate in ($modeArg -split ",")) {
+        $normalized = $candidate.Trim().ToLowerInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            $NormalizedModes.Add($normalized)
+        }
+    }
+}
+
+$Modes = @($NormalizedModes | Select-Object -Unique)
+if ($Modes.Count -eq 0) {
+    throw "At least one mode must be provided via -Modes. Available modes: $($SupportedModes -join ', ')"
+}
+
+$InvalidModes = @($Modes | Where-Object { $_ -notin $SupportedModes })
+if ($InvalidModes.Count -gt 0) {
+    throw "Unsupported mode(s): $($InvalidModes -join ', '). Available modes: $($SupportedModes -join ', ')"
 }
 
 $FinishedFlagFileName = ".codegen-finished"
@@ -224,6 +276,71 @@ function Get-SecureGenerateInstructions([string]$PluginSource) {
     ) -join "`n"
 }
 
+function Get-FiassedPrdContent {
+    param(
+        [string]$WorkingDir,
+        [string]$PluginSource,
+        [string]$OriginalPrdContent,
+        [string]$Label
+    )
+
+    if ($DryRun) {
+        Write-Host "  [DRY-RUN] Would enhance PRD via fiassed play for: $Label" -ForegroundColor Yellow
+        return $OriginalPrdContent
+    }
+
+    $playCandidates = @(
+        (Join-Path $PluginSource "plays\requirements-analysis\prd-fiasse-asvs-enhancement.md"),
+        (Join-Path $PluginSource "plays\requirements-analysis\prd-fiasse-asvs-enhansement.md")
+    )
+    $playPath = $playCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $playPath) {
+        throw "fiassed mode requires play file 'prd-fiasse-asvs-enhancement.md'. Expected under plays/requirements-analysis in plugin repo."
+    }
+
+    $playContent = Get-Content $playPath -Raw
+    $enhancePrompt = @(
+        "Run the following play exactly to enhance the provided PRD.",
+        "",
+        "Output requirements:",
+        "- Return ONLY the enhanced PRD markdown",
+        "- Do not wrap in code fences",
+        "- Do not add explanations before or after",
+        "",
+        "=== PLAY: prd-fiasse-asvs-enhancement ===",
+        $playContent,
+        "=== END PLAY ===",
+        "",
+        "=== INPUT PRD ===",
+        $OriginalPrdContent,
+        "=== END INPUT PRD ==="
+    ) -join "`n"
+
+    $enhanceLogFile = Join-Path $WorkingDir "claude-prd-enhancement.log"
+    $enhancedPrdFile = Join-Path $WorkingDir "enhanced-prd.md"
+
+    Write-Step "Enhancing PRD via fiassed play for: $Label" "Green"
+    Push-Location $WorkingDir
+    try {
+        $enhancedOutput = $enhancePrompt | claude --print --permission-mode bypassPermissions 2>&1 | Tee-Object -FilePath $enhanceLogFile
+        if ($LASTEXITCODE -ne 0) {
+            throw "Claude PRD enhancement failed with exit code $LASTEXITCODE for $Label - check $enhanceLogFile"
+        }
+
+        $enhancedContent = (($enhancedOutput | Out-String).Trim())
+        if ([string]::IsNullOrWhiteSpace($enhancedContent)) {
+            throw "Claude PRD enhancement produced empty output for $Label - check $enhanceLogFile"
+        }
+
+        Set-Content -Path $enhancedPrdFile -Value $enhancedContent -Encoding UTF8
+        Write-Host "  Enhanced PRD written: $enhancedPrdFile" -ForegroundColor DarkGray
+        return $enhancedContent
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 # ===========================================================================
 # MAIN
 # ===========================================================================
@@ -266,6 +383,7 @@ Write-Host "  PRD file   : $PrdFile"
 Write-Host "  Output dir : $OutputDir"
 Write-Host "  Dry run    : $DryRun"
 Write-Host "  Resume     : $Resume"
+Write-Host "  Modes      : $($Modes -join ', ')"
 
 # ---------------------------------------------------------------------------
 # Prerequisite check
@@ -315,7 +433,8 @@ $SecureInstructions = Get-SecureGenerateInstructions $PluginTemp
 foreach ($langKey in $Languages.Keys) {
     $langLabel = $Languages[$langKey]
 
-    foreach ($mode in @("rawdog", "securable")) {
+    foreach ($mode in $Modes) {
+        $modeConfig = $ModeDefinitions[$mode]
 
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
         $finishedFlagPath = Join-Path $targetDir $FinishedFlagFileName
@@ -353,7 +472,7 @@ foreach ($langKey in $Languages.Keys) {
         # fence. Claude Code stops its upward directory walk when it finds a
         # CLAUDE.md, preventing any plugin files in parent directories from
         # bleeding into the plain baseline run.
-        if ($mode -eq "rawdog") {
+        if (-not $modeConfig.IsSecurable) {
             $fenceContent = @(
                 "# codegen-test: rawdog baseline",
                 "# This file exists only to prevent context from parent directories",
@@ -363,7 +482,8 @@ foreach ($langKey in $Languages.Keys) {
         }
 
         # ---- Build the prompt ----
-        if ($mode -eq "rawdog") {
+        $effectivePrdContent = $PrdContent
+        if (-not $modeConfig.IsSecurable) {
             $prompt = @(
                 "Generate a complete, working $langLabel project based on the following PRD.",
                 "",
@@ -376,12 +496,16 @@ foreach ($langKey in $Languages.Keys) {
                 "",
                 "PRD:",
                 "---",
-                $PrdContent,
+                $effectivePrdContent,
                 "---"
             ) -join "`n"
         } else {
             # securable: install plugin files then embed /secure-generate instructions
             Install-SecurablePlugin -PluginSource $PluginTemp -TargetDir $targetDir
+
+            if ($modeConfig.IsFiassed) {
+                $effectivePrdContent = Get-FiassedPrdContent -WorkingDir $targetDir -PluginSource $PluginTemp -OriginalPrdContent $PrdContent -Label "$langKey / $mode"
+            }
 
             $prompt = @(
                 "You are operating with the securable-claude-plugin active (CLAUDE.md and",
@@ -409,7 +533,7 @@ foreach ($langKey in $Languages.Keys) {
                 "",
                 "PRD:",
                 "---",
-                $PrdContent,
+                $effectivePrdContent,
                 "---"
             ) -join "`n"
         }
@@ -434,8 +558,10 @@ Write-Host "Generated folder structure:" -ForegroundColor White
 foreach ($langKey in $Languages.Keys) {
     Write-Host "  $OutputDir\" -NoNewline -ForegroundColor Gray
     Write-Host "$langKey\" -ForegroundColor Cyan
-    Write-Host "    rawdog\     <- plain generation" -ForegroundColor Gray
-    Write-Host "    securable\  <- FIASSE/SSEM secured generation" -ForegroundColor Gray
+    foreach ($mode in $Modes) {
+        $summaryLabel = $ModeDefinitions[$mode].SummaryLabel
+        Write-Host "    $mode\  <- $summaryLabel" -ForegroundColor Gray
+    }
 }
 Write-Host ""
 Write-Host "Each folder contains a claude-output.log with the full Claude response." -ForegroundColor DarkGray

@@ -3,13 +3,14 @@
 # run-codegen-claude.sh
 #
 # Automates Claude Code CLI to generate a project from a PRD in 3 languages,
-# each with a "rawdog" (plain) and "securable" (FIASSE plugin) variant.
+# each with a selectable generation mode such as rawdog, securable, or fiassed.
 #
 # Output structure:
 #   <output-dir>/
 #     aspnet/
 #       rawdog/     <- Plain Claude Code generation
 #       securable/  <- Generation with securable-claude-plugin active
+#       fiassed/    <- securable + PRD enhancement play
 #     jsp/
 #       rawdog/
 #       securable/
@@ -18,7 +19,7 @@
 #       securable/
 #
 # Usage:
-#   ./run-codegen-claude.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume]
+#   ./run-codegen-claude.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume] [--modes <list>]
 #   ./run-codegen-claude.sh --clean [--output-dir <dir>]
 #
 # Options:
@@ -27,6 +28,7 @@
 #   --plugin-repo  Git URL of the securable-claude-plugin (default: canonical repo)
 #   --dry-run      Print what would run without calling Claude Code
 #   --resume       Skip completed variations and preserve existing directories
+#   --modes        Comma-separated or repeated mode list (default: rawdog,securable)
 #   --clean        Remove cached plugin clone and finished flags, then exit
 #   -h, --help     Show this help text
 #
@@ -36,6 +38,7 @@
 # Examples:
 #   ./run-codegen-claude.sh --prd ./my-prd.md
 #   ./run-codegen-claude.sh --prd ./my-prd.md --output-dir ~/projects/codegen --dry-run
+#   ./run-codegen-claude.sh --prd ./my-prd.md --modes fiassed
 #   ./run-codegen-claude.sh --prd ./my-prd.md --resume
 #   ./run-codegen-claude.sh --clean --output-dir ~/projects/codegen
 # =============================================================================
@@ -64,6 +67,7 @@ DRY_RUN=false
 RESUME=false
 CLEAN=false
 FINISHED_FLAG=".codegen-finished"
+MODES_INPUTS=()
 
 # -----------------------------------------------------------------------------
 # Language definitions  (keys and labels kept in parallel arrays for bash 3
@@ -74,6 +78,24 @@ declare -A LANG_LABELS=(
     ["aspnet"]="ASP.NET Core (C#) Web API / MVC application"
     ["jsp"]="Java web application using JSP (Java Server Pages) and servlets"
     ["node"]="Node.js web application using Express.js"
+)
+
+declare -A MODE_IS_SECURABLE=(
+    [rawdog]=false
+    [securable]=true
+    [fiassed]=true
+)
+
+declare -A MODE_IS_FIASSED=(
+    [rawdog]=false
+    [securable]=false
+    [fiassed]=true
+)
+
+declare -A MODE_SUMMARY=(
+    [rawdog]="plain generation"
+    [securable]="FIASSE/SSEM secured generation"
+    [fiassed]="FIASSE/SSEM secured generation with PRD play enhancement"
 )
 
 # -----------------------------------------------------------------------------
@@ -94,6 +116,7 @@ while [[ $# -gt 0 ]]; do
         --plugin-repo)  PLUGIN_REPO="$2"; shift 2 ;;
         --dry-run)      DRY_RUN=true;     shift   ;;
         --resume)       RESUME=true;      shift   ;;
+        --modes)        MODES_INPUTS+=("$2"); shift 2 ;;
         --clean)        CLEAN=true;       shift   ;;
         -h|--help)      usage ;;
         *) _red "Unknown option: $1"; usage ;;
@@ -104,6 +127,34 @@ done
 # Validation
 # -----------------------------------------------------------------------------
 OUTPUT_DIR="$(realpath -m "$OUTPUT_DIR")"
+
+if [[ ${#MODES_INPUTS[@]} -eq 0 ]]; then
+    MODES_INPUTS=("rawdog" "securable")
+fi
+
+MODES=()
+declare -A _seen_modes=()
+for mode_arg in "${MODES_INPUTS[@]}"; do
+    IFS=',' read -r -a _parts <<< "$mode_arg"
+    for candidate in "${_parts[@]}"; do
+        normalized="${candidate,,}"
+        normalized="${normalized//[[:space:]]/}"
+        [[ -z "$normalized" ]] && continue
+        if [[ -z "${MODE_SUMMARY[$normalized]+x}" ]]; then
+            _red "Error: Unsupported mode '$normalized'. Available modes: rawdog, securable, fiassed"
+            exit 1
+        fi
+        if [[ -z "${_seen_modes[$normalized]+x}" ]]; then
+            MODES+=("$normalized")
+            _seen_modes[$normalized]=1
+        fi
+    done
+done
+
+if [[ ${#MODES[@]} -eq 0 ]]; then
+    _red "Error: At least one mode must be provided via --modes. Available modes: rawdog, securable, fiassed"
+    exit 1
+fi
 
 # --clean mode: early exit — no PRD required
 if [[ "$CLEAN" == true ]]; then
@@ -219,6 +270,73 @@ values. Produce structured audit logging for all accountable actions.
 FALLBACK
 }
 
+get_fiassed_prd_content() {
+    local working_dir="$1"
+    local plugin_source="$2"
+    local original_prd_content="$3"
+    local label="$4"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        _yellow "  [DRY-RUN] Would enhance PRD via fiassed play for: $label" >&2
+        printf '%s' "$original_prd_content"
+        return 0
+    fi
+
+    local play_path=""
+    for candidate in \
+        "$plugin_source/plays/requirements-analysis/prd-fiasse-asvs-enhancement.md" \
+        "$plugin_source/plays/requirements-analysis/prd-fiasse-asvs-enhansement.md"
+    do
+        if [[ -f "$candidate" ]]; then
+            play_path="$candidate"
+            break
+        fi
+    done
+
+    if [[ -z "$play_path" ]]; then
+        _red "Error: fiassed mode requires prd-fiasse-asvs-enhancement.md under plays/requirements-analysis"
+        exit 1
+    fi
+
+    local enhance_prompt_file
+    enhance_prompt_file="$(mktemp /tmp/claude_prd_enhance_XXXXXX.txt)"
+    local enhance_log_file="$working_dir/claude-prd-enhancement.log"
+    local enhanced_prd_file="$working_dir/enhanced-prd.md"
+
+    cat > "$enhance_prompt_file" <<PROMPT
+Run the following play exactly to enhance the provided PRD.
+
+Output requirements:
+- Return ONLY the enhanced PRD markdown
+- Do not wrap in code fences
+- Do not add explanations before or after
+
+=== PLAY: prd-fiasse-asvs-enhancement ===
+$(cat "$play_path")
+=== END PLAY ===
+
+=== INPUT PRD ===
+${original_prd_content}
+=== END INPUT PRD ===
+PROMPT
+
+    write_step "Enhancing PRD via fiassed play for: $label" >&2
+    local enhanced_content
+    if ! enhanced_content="$(
+        cd "$working_dir"
+        claude --print --permission-mode bypassPermissions < "$enhance_prompt_file" 2>&1 | tee "$enhance_log_file"
+    )"; then
+        rm -f "$enhance_prompt_file"
+        _red "Error: Claude PRD enhancement failed for $label. Check $enhance_log_file"
+        exit 1
+    fi
+
+    rm -f "$enhance_prompt_file"
+    printf '%s' "$enhanced_content" > "$enhanced_prd_file"
+    _gray "  Enhanced PRD written: $enhanced_prd_file" >&2
+    printf '%s' "$enhanced_content"
+}
+
 # -----------------------------------------------------------------------------
 # invoke_claude  <working-dir>  <prompt-file>  <label>
 #
@@ -258,6 +376,7 @@ _gray "  PRD file   : $PRD_FILE"
 _gray "  Output dir : $OUTPUT_DIR"
 _gray "  Dry run    : $DRY_RUN"
 _gray "  Resume     : $RESUME"
+_gray "  Modes      : ${MODES[*]}"
 
 write_step "Checking prerequisites ..."
 if [[ "$DRY_RUN" == false ]]; then
@@ -306,7 +425,7 @@ trap 'rm -f "$PROMPT_TMP"' EXIT
 for lang_key in "${LANG_KEYS[@]}"; do
     lang_label="${LANG_LABELS[$lang_key]}"
 
-    for mode in rawdog securable; do
+    for mode in "${MODES[@]}"; do
         target_dir="$OUTPUT_DIR/$lang_key/$mode"
         finished_flag_path="$target_dir/$FINISHED_FLAG"
 
@@ -349,7 +468,7 @@ for lang_key in "${LANG_KEYS[@]}"; do
         # directory walk when they find a CLAUDE.md, so this prevents plugin
         # files in any parent directory from bleeding into the plain run.
         # ------------------------------------------------------------------
-        if [[ "$mode" == "rawdog" ]]; then
+        if [[ "${MODE_IS_SECURABLE[$mode]}" == false ]]; then
             cat > "$target_dir/CLAUDE.md" <<'FENCE'
 # codegen-test: rawdog baseline
 # This file exists only to prevent context from parent directories
@@ -357,7 +476,8 @@ for lang_key in "${LANG_KEYS[@]}"; do
 FENCE
         fi
 
-        if [[ "$mode" == "rawdog" ]]; then
+        effective_prd_content="$PRD_CONTENT"
+        if [[ "${MODE_IS_SECURABLE[$mode]}" == false ]]; then
             # Plain prompt — no plugin
             cat > "$PROMPT_TMP" <<PROMPT
 Generate a complete, working ${lang_label} project based on the following PRD.
@@ -371,13 +491,17 @@ current working directory. Only create this file after all required project file
 
 PRD:
 ---
-${PRD_CONTENT}
+${effective_prd_content}
 ---
 PROMPT
 
         else
             # Securable — install plugin files, then embed instructions in prompt
             install_plugin "$PLUGIN_TEMP" "$target_dir"
+
+            if [[ "${MODE_IS_FIASSED[$mode]}" == true ]]; then
+                effective_prd_content="$(get_fiassed_prd_content "$target_dir" "$PLUGIN_TEMP" "$PRD_CONTENT" "$lang_key / $mode")"
+            fi
 
             cat > "$PROMPT_TMP" <<PROMPT
 You are operating with the securable-claude-plugin active (CLAUDE.md and
@@ -405,7 +529,7 @@ current working directory. Only create this file after all required project file
 
 PRD:
 ---
-${PRD_CONTENT}
+${effective_prd_content}
 ---
 PROMPT
         fi
@@ -422,8 +546,9 @@ echo
 _cyan "Generated folder structure:"
 for lang_key in "${LANG_KEYS[@]}"; do
     _cyan "  $OUTPUT_DIR/$lang_key/"
-    _gray "    rawdog/     <- plain generation"
-    _gray "    securable/  <- FIASSE/SSEM secured generation"
+    for mode in "${MODES[@]}"; do
+        _gray "    $mode/  <- ${MODE_SUMMARY[$mode]}"
+    done
 done
 echo
 _gray "Each folder contains a claude-output.log with the full Claude response."

@@ -89,7 +89,7 @@ param(
     [switch]$Resume,
 
     [ValidateCount(1, 32)]
-    [string[]]$Modes = @("rawdog", "securable"),
+    [string[]]$Modes = @("rawdog", "securable", "fiassed"),
 
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
