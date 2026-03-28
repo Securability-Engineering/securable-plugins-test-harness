@@ -71,7 +71,7 @@ param(
     [switch]$Resume,
 
     [ValidateCount(1, 32)]
-    [string[]]$Modes = @("rawdog", "securable"),
+    [string[]]$Modes = @("rawdog", "securable", "fiassed"),
 
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
@@ -157,7 +157,8 @@ function Invoke-Claude {
     param(
         [string]$WorkingDir,
         [string]$Prompt,
-        [string]$Label
+        [string]$Label,
+        [string]$PluginDir
     )
 
     $logFile = Join-Path $WorkingDir "claude-output.log"
@@ -165,6 +166,9 @@ function Invoke-Claude {
     if ($DryRun) {
         Write-Host "  [DRY-RUN] Would run in: $WorkingDir" -ForegroundColor Yellow
         Write-Host "  [DRY-RUN] Prompt starts: $($Prompt.Substring(0, [Math]::Min(120, $Prompt.Length)))..." -ForegroundColor Yellow
+        if ($PluginDir) {
+            Write-Host "  [DRY-RUN] Plugin dir: $PluginDir" -ForegroundColor Yellow
+        }
         return
     }
 
@@ -174,9 +178,14 @@ function Invoke-Claude {
 
     Push-Location $WorkingDir
     try {
+        $claudeArgs = @("--print", "--permission-mode", "bypassPermissions")
+        if ($PluginDir) {
+            $claudeArgs += @("--plugin-dir", $PluginDir)
+        }
+
         # Pipe the prompt via stdin; --print keeps Claude non-interactive.
         # bypassPermissions prevents interactive write approval prompts.
-        $Prompt | claude --print --permission-mode bypassPermissions 2>&1 | Tee-Object -FilePath $logFile
+        $Prompt | & claude @claudeArgs 2>&1 | Tee-Object -FilePath $logFile
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Claude exited with code $LASTEXITCODE for $Label - check $logFile"
         }
@@ -213,8 +222,8 @@ function Set-ClaudeWritePermissions {
 }
 
 # ---------------------------------------------------------------------------
-# Helper: Install the securable plugin into a target directory.
-#   Copies .claude/, CLAUDE.md, skills/, and data/ from the cloned plugin repo.
+# Helper: Install minimal securable plugin marker into a target directory.
+#   Copies only CLAUDE.md from the cloned plugin repo.
 # ---------------------------------------------------------------------------
 function Install-SecurablePlugin {
     param(
@@ -222,22 +231,10 @@ function Install-SecurablePlugin {
         [string]$TargetDir       # project directory to install into
     )
 
-    $claudeDir = Join-Path $PluginSource ".claude"
     $claudeMd  = Join-Path $PluginSource "CLAUDE.md"
-    $skillsDir = Join-Path $PluginSource "skills"
-    $dataDir   = Join-Path $PluginSource "data"
 
-    if (Test-Path $claudeDir) {
-        Copy-Item -Recurse -Force $claudeDir (Join-Path $TargetDir ".claude")
-    }
     if (Test-Path $claudeMd) {
         Copy-Item -Force $claudeMd (Join-Path $TargetDir "CLAUDE.md")
-    }
-    if (Test-Path $skillsDir) {
-        Copy-Item -Recurse -Force $skillsDir (Join-Path $TargetDir "skills")
-    }
-    if (Test-Path $dataDir) {
-        Copy-Item -Recurse -Force $dataDir (Join-Path $TargetDir "data")
     }
 }
 
@@ -446,6 +443,7 @@ foreach ($langKey in $Languages.Keys) {
 
         # ---- Build the prompt ----
         $effectivePrdContent = $PrdContent
+        $pluginDirForMode = $null
         if (-not $modeConfig.IsSecurable) {
             $prompt = @(
                 "Generate a complete, working $langLabel project based on the following PRD.",
@@ -463,17 +461,18 @@ foreach ($langKey in $Languages.Keys) {
                 "---"
             ) -join "`n"
         } else {
-            # securable: install plugin files and let Claude load them from disk
+            # securable: install only CLAUDE.md and load the plugin via --plugin-dir
             Install-SecurablePlugin -PluginSource $PluginTemp -TargetDir $targetDir
+            $pluginDirForMode = $PluginTemp
 
             if ($modeConfig.IsFiassed) {
                 $effectivePrdContent = Get-FiassedPrdContent -WorkingDir $targetDir -PluginSource $PluginTemp -OriginalPrdContent $PrdContent -Label "$langKey / $mode"
             }
 
             $prompt = @(
-                "You are operating inside a project with the securable-claude-plugin installed.",
-                "Use the plugin files already present in this working directory as your source of",
-                "securability constraints while generating the project.",
+                "You are operating with the securable-claude-plugin active.",
+                "The plugin is provided via the CLI --plugin-dir argument for this run.",
+                "Use the active plugin constraints while generating the project.",
                 "",
                 "Generate a complete, working $langLabel project based on the following PRD,",
                 "applying the active plugin's FIASSE/SSEM constraints throughout the generated code.",
@@ -502,7 +501,7 @@ foreach ($langKey in $Languages.Keys) {
             Set-ClaudeWritePermissions -TargetDir $targetDir
         }
         
-        Invoke-Claude -WorkingDir $targetDir -Prompt $prompt -Label $label
+        Invoke-Claude -WorkingDir $targetDir -Prompt $prompt -Label $label -PluginDir $pluginDirForMode
     }
 }
 

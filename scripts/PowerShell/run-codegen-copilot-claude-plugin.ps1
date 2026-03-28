@@ -94,7 +94,6 @@ param(
     [switch]$Clean
 )
 
-Import-Module (Join-Path $PSScriptRoot "ExternalAgentTools\ExternalAgentTools.psm1")
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -232,7 +231,7 @@ function Invoke-CopilotAgent {
         try {
             Set-Content -Path $promptFile -Value $Prompt -Encoding UTF8
 
-            $copilotArgs = @("--allow-all-tools", "--add-dir", $WorkingDir, "--allow-all-urls", "--no-alt-screen")
+            $copilotArgs = @("--allow-all-tools", "--add-dir", $WorkingDir, "--allow-all-urls")
             if ($Resume) {
                 $copilotArgs += "--resume"
             }
@@ -319,7 +318,7 @@ function Get-FiassedPrdContent {
     try {
         Set-Content -Path $promptFile -Value $enhancePrompt -Encoding UTF8
 
-        $copilotArgs = @("--allow-all-tools", "--add-dir", $WorkingDir, "--allow-all-urls", "--no-alt-screen", "-p", $promptFile)
+        $copilotArgs = @("--allow-all-tools", "--add-dir", $WorkingDir, "--allow-all-urls", "-p", $promptFile)
         if ($Resume) {
             $copilotArgs += "--resume"
         }
