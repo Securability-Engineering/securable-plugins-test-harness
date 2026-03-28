@@ -24,8 +24,12 @@
     Plugin activation mechanism (securable mode):
         The script clones securable-opencode-module once, then copies the
         module into .securable/ in each securable target directory and writes
-        an opencode.json referencing the MCP server and instructions.
-        OpenCode discovers the MCP tools and instructions automatically.
+        an opencode.json with permissions.
+
+    Fiassed enhancement mechanism:
+        The script runs the module-native workflow runner:
+        node ./.securable/scripts/run-workflow.js prd-securability-enhance <input-json>
+        and uses result.enhancedPrd as the effective PRD for generation.
 
     OpenCode invocation:
         opencode run -f <prompt-file>
@@ -263,16 +267,12 @@ function Invoke-OpenCode {
 # Helper: Install the securable-opencode-module into a target directory.
 #
 #   The module is copied into .securable/ in the target directory, and an
-#   opencode.json is written/merged at the target root to configure the
-#   MCP server and system instructions.
+#   opencode.json is written at the target root to configure permissions.
 #
 #   Module layout:
-#     .securable/instructions.md
-#     .securable/tools/mcp_server.py
+#     .securable/config.json
+#     .securable/tools/
 #     .securable/workflows/
-#     .securable/data/fiasse/
-#     .securable/data/asvs/
-#     .securable/templates/
 #     .securable/scripts/
 # ---------------------------------------------------------------------------
 function Install-SecurableModule {
@@ -307,26 +307,18 @@ function Install-SecurableModule {
         }
     }
 
-    # Write opencode.json at the target root with MCP server config and
-    # instructions reference, plus permission grants
+    # Write opencode.json at the target root with permission grants.
+    # Keep instructions path if the module ships one.
     $opencodeConfig = @{
-        "`$schema"    = "https://opencode.ai/config.json"
-        "mcpServers"  = @{
-            "securable" = @{
-                "command" = "python"
-                "args"    = @("./.securable/tools/mcp_server.py")
-                "env"     = @{
-                    "SECURABLE_DATA_DIR"      = "./.securable/data"
-                    "SECURABLE_TEMPLATES_DIR" = "./.securable/templates"
-                    "SECURABLE_WORKFLOWS_DIR" = "./.securable/workflows"
-                }
-            }
-        }
-        "instructions" = "./.securable/instructions.md"
-        "permission"   = @{
+        "`$schema"  = "https://opencode.ai/config.json"
+        "permission" = @{
             "edit" = "allow"
             "bash" = "allow"
         }
+    }
+
+    if (Test-Path (Join-Path $dstSecurable "instructions.md")) {
+        $opencodeConfig["instructions"] = "./.securable/instructions.md"
     }
 
     $configPath = Join-Path $TargetDir "opencode.json"
@@ -375,44 +367,32 @@ function Get-SecurableInstructions([string]$PluginSource) {
 }
 
 # ---------------------------------------------------------------------------
-# Helper: Resolve the PRD enhancement workflow used by fiassed mode.
+# Helper: Resolve module assets required by fiassed enhancement mode.
 # ---------------------------------------------------------------------------
 function Resolve-FiassedWorkflowPath {
     param(
         [string]$PluginSource
     )
 
-    $candidates = @(
-        (Join-Path $PluginSource "workflows\prd-securability-enhanced.md"),
-        (Join-Path $PluginSource "workflows\requirements-analysis\prd-securability-enhanced.md"),
-        (Join-Path $PluginSource "workflows\prd-securability-enhancement.md"),
-        (Join-Path $PluginSource "workflows\requirements-analysis\prd-securability-enhancement.md"),
-        (Join-Path $PluginSource "workflows\prd-fiasse-asvs-enhancement.md"),
-        (Join-Path $PluginSource "workflows\requirements-analysis\prd-fiasse-asvs-enhancement.md")
-    )
+    $workflowPath = Join-Path $PluginSource "workflows\prd-securability-enhance.workflow.json"
+    $runnerPath = Join-Path $PluginSource "scripts\run-workflow.js"
+    $toolPath = Join-Path $PluginSource "tools\prd_securability_enhance.js"
 
-    foreach ($path in $candidates) {
-        if (Test-Path $path -PathType Leaf) {
-            return $path
-        }
+    if (-not (Test-Path $workflowPath -PathType Leaf)) {
+        return $null
+    }
+    if (-not (Test-Path $runnerPath -PathType Leaf)) {
+        return $null
+    }
+    if (-not (Test-Path $toolPath -PathType Leaf)) {
+        return $null
     }
 
-    $workflowDir = Join-Path $PluginSource "workflows"
-    if (Test-Path $workflowDir -PathType Container) {
-        $fallback = Get-ChildItem -Path $workflowDir -Filter "*.md" -Recurse -File |
-            Where-Object {
-                $_.Name -match "prd.*secur.*enhanc" -or
-                $_.Name -match "prd.*fiasse.*asvs.*enhanc"
-            } |
-            Sort-Object -Property FullName |
-            Select-Object -First 1
-
-        if ($fallback) {
-            return $fallback.FullName
-        }
+    return @{
+        WorkflowPath = $workflowPath
+        RunnerPath   = $runnerPath
+        ToolPath     = $toolPath
     }
-
-    return $null
 }
 
 # ---------------------------------------------------------------------------
@@ -426,77 +406,76 @@ function Get-FiassedPrdContent {
         [string]$Label
     )
 
-    $workflowPath = Resolve-FiassedWorkflowPath -PluginSource $PluginSource
-    if (-not $workflowPath) {
-        throw "fiassed mode requires a PRD enhancement workflow in the plugin repository. Expected a workflow similar to 'prd-securability-enhanced.md' under workflows/."
+    $workflowAssets = Resolve-FiassedWorkflowPath -PluginSource $PluginSource
+    if (-not $workflowAssets) {
+        throw "fiassed mode requires module assets 'workflows/prd-securability-enhance.workflow.json', 'scripts/run-workflow.js', and 'tools/prd_securability_enhance.js'."
     }
 
     if ($DryRun) {
         Write-Host "  [DRY-RUN] Would enhance PRD via fiassed workflow for: $Label" -ForegroundColor Yellow
-        Write-Host "  [DRY-RUN] Workflow file: $workflowPath" -ForegroundColor Yellow
+        Write-Host "  [DRY-RUN] Workflow file: $($workflowAssets.WorkflowPath)" -ForegroundColor Yellow
         return $OriginalPrdContent
     }
 
-    $workflowContent = Get-Content $workflowPath -Raw
-    $enhancePrompt = @(
-        "Run the following PRD securability enhancement workflow exactly.",
-        "",
-        "Output requirements:",
-        "- Return ONLY the enhanced PRD markdown",
-        "- Do not wrap output in code fences",
-        "- Do not add explanations before or after",
-        "",
-        "=== WORKFLOW: prd securability enhanced ===",
-        $workflowContent,
-        "=== END WORKFLOW ===",
-        "",
-        "=== INPUT PRD ===",
-        $OriginalPrdContent,
-        "=== END INPUT PRD ==="
-    ) -join "`n"
-
     $enhanceLogFile = Join-Path $WorkingDir "opencode-prd-enhancement.log"
     $enhancedPrdFile = Join-Path $WorkingDir "enhanced-prd.md"
+    $inputPrdFile = Join-Path $WorkingDir "fiassed-input-prd.md"
+    $workflowInputFile = Join-Path $WorkingDir "fiassed-input.json"
 
     Write-Step "Enhancing PRD via fiassed workflow for: $Label" "Green"
-    Write-Host "  Workflow   : $workflowPath"
+    Write-Host "  Workflow   : $($workflowAssets.WorkflowPath)"
     Write-Host "  Log file   : $enhanceLogFile"
+
+    Set-Content -Path $inputPrdFile -Value $OriginalPrdContent -Encoding UTF8
+
+    $workflowInput = @{
+        "workspaceRoot" = "."
+        "prdPath" = (Split-Path $inputPrdFile -Leaf)
+        "asvsLevel" = 2
+        "maxRequirementsPerFeature" = 6
+    }
+    Write-Utf8NoBomFile -Path $workflowInputFile -Content ($workflowInput | ConvertTo-Json -Depth 10)
 
     Push-Location $WorkingDir
     try {
-        $promptFile = Join-Path $env:TEMP "opencode_prd_enhance_$([System.IO.Path]::GetRandomFileName()).txt"
+        $workflowOutput = & node ".\.securable\scripts\run-workflow.js" "prd-securability-enhance" (Split-Path $workflowInputFile -Leaf) 2>&1 |
+            Tee-Object -FilePath $enhanceLogFile
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "node workflow runner failed with exit code $LASTEXITCODE for $Label - check $enhanceLogFile"
+        }
+
+        $workflowJsonText = (($workflowOutput | Out-String).Trim())
+        if ([string]::IsNullOrWhiteSpace($workflowJsonText)) {
+            throw "fiassed workflow returned empty output for $Label - check $enhanceLogFile"
+        }
+
         try {
-            Set-Content -Path $promptFile -Value $enhancePrompt -Encoding UTF8
-
-            $env:OPENCODE_PERMISSION = '{"edit": "allow", "bash": "allow"}'
-
-            $previousErrorActionPreference = $ErrorActionPreference
-            $ErrorActionPreference = "Continue"
-            try {
-                $enhancedOutput = (& cmd /c "opencode run < $promptFile" 2>&1 | Tee-Object -FilePath $enhanceLogFile)
-            }
-            finally {
-                $ErrorActionPreference = $previousErrorActionPreference
-                Remove-Item Env:\OPENCODE_PERMISSION -ErrorAction SilentlyContinue
-            }
-
-            if ($LASTEXITCODE -ne 0) {
-                throw "opencode PRD enhancement failed with exit code $LASTEXITCODE for $Label - check $enhanceLogFile"
-            }
-
-            $enhancedContent = (($enhancedOutput | Out-String).Trim())
-            if ([string]::IsNullOrWhiteSpace($enhancedContent)) {
-                throw "opencode PRD enhancement produced empty output for $Label - check $enhanceLogFile"
-            }
-
-            Set-Content -Path $enhancedPrdFile -Value $enhancedContent -Encoding UTF8
-            Write-Host "  Enhanced PRD written: $enhancedPrdFile" -ForegroundColor DarkGray
-
-            return $enhancedContent
+            $workflowJson = $workflowJsonText | ConvertFrom-Json
         }
-        finally {
-            if (Test-Path $promptFile) { Remove-Item -Force $promptFile }
+        catch {
+            throw "fiassed workflow output was not valid JSON for $Label - check $enhanceLogFile"
         }
+
+        if (-not $workflowJson.ok) {
+            $errorMessage = "fiassed workflow reported failure"
+            if ($workflowJson.error -and $workflowJson.error.message) {
+                $errorMessage = $workflowJson.error.message
+            } elseif ($workflowJson.reason) {
+                $errorMessage = $workflowJson.reason
+            }
+            throw "$errorMessage for $Label - check $enhanceLogFile"
+        }
+
+        $enhancedContent = $workflowJson.result.enhancedPrd
+        if ([string]::IsNullOrWhiteSpace($enhancedContent)) {
+            throw "fiassed workflow output did not include result.enhancedPrd for $Label - check $enhanceLogFile"
+        }
+
+        Set-Content -Path $enhancedPrdFile -Value $enhancedContent -Encoding UTF8
+        Write-Host "  Enhanced PRD written: $enhancedPrdFile" -ForegroundColor DarkGray
+
+        return $enhancedContent
     }
     finally {
         Pop-Location
@@ -573,7 +552,7 @@ Write-Step "Checking prerequisites ..."
 if (-not $DryRun) {
     Assert-Tool "opencode"
     Assert-Tool "git"
-    Assert-Tool "python"
+    Assert-Tool "node"
 } else {
     Write-Host "  [DRY-RUN] Skipping tool checks" -ForegroundColor Yellow
 }
@@ -602,8 +581,11 @@ if (Test-Path $PluginTemp) {
         New-Item -ItemType Directory -Force -Path (Join-Path $PluginTemp "data\asvs") | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $PluginTemp "templates") | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $PluginTemp "scripts") | Out-Null
+        Set-Content (Join-Path $PluginTemp "config.json") "{}"
         Set-Content (Join-Path $PluginTemp "instructions.md") "# securable-opencode-module stub (dry-run)"
-        Set-Content (Join-Path $PluginTemp "workflows\prd-securability-enhanced.md") "# prd securability enhanced (dry-run stub)"
+        Set-Content (Join-Path $PluginTemp "tools\prd_securability_enhance.js") "#!/usr/bin/env node`nconsole.log('{}')"
+        Set-Content (Join-Path $PluginTemp "scripts\run-workflow.js") '#!/usr/bin/env node`nconsole.log(''{"ok":true,"result":{"enhancedPrd":"dry-run stub"}}'')'
+        Set-Content (Join-Path $PluginTemp "workflows\prd-securability-enhance.workflow.json") "{}"
         Set-Content (Join-Path $PluginTemp "opencode.json") "{}"
     } else {
         git clone $PluginRepo $PluginTemp
@@ -699,8 +681,8 @@ foreach ($langKey in $Languages.Keys) {
 
             $prompt = @(
                 "You are operating with the securable-opencode-module active (.securable/ directory",
-                "and opencode.json are present in this directory). The MCP tools securability_review,",
-                "secure_generate, and fiasse_lookup are available.",
+                "and opencode.json are present in this directory). The module tools and workflows are available,",
+                "including fiasse_lookup, securability_review, secure_generate, and prd_securability_enhance.",
                 "",
                 "The following securability engineering instructions are your primary",
                 "constraints - treat them as non-negotiable design requirements.",

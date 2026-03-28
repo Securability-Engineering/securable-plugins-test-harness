@@ -7,8 +7,11 @@
 #
 # Uses the securable-opencode-module for the securable runs. The module is
 # copied into .securable/ in each target directory, and an opencode.json is
-# written at the project root to configure the MCP server and instructions.
-# OpenCode discovers the MCP tools and instructions automatically.
+# written at the project root with permission configuration.
+#
+# Fiassed enhancement is module-native: it runs
+#   node ./.securable/scripts/run-workflow.js prd-securability-enhance <input-json>
+# and uses result.enhancedPrd as the effective PRD.
 #
 # OpenCode invocation:
 #   opencode run -f <prompt-file>
@@ -45,7 +48,7 @@
 #   -h, --help     Show this help text
 #
 # Requirements:
-#   - bash 4+, git, opencode, python (3.10+ for MCP server), tee, mktemp
+#   - bash 4+, git, opencode, node (18+), tee, mktemp
 #
 # Examples:
 #   ./run-codegen-opencode.sh --prd ./my-prd.md
@@ -221,18 +224,15 @@ assert_tool() {
 # install_module  <module-source-dir>  <target-dir>
 #
 # Copies the securable-opencode-module into .securable/ in the target
-# directory, and writes an opencode.json at the target root to configure
-# the MCP server, instructions, and permissions.
+# directory, and writes an opencode.json at the target root with
+# permission configuration.
 #
 # Module layout in target:
-#   .securable/instructions.md
-#   .securable/tools/mcp_server.py
+#   .securable/config.json
+#   .securable/tools/
 #   .securable/workflows/
-#   .securable/data/fiasse/
-#   .securable/data/asvs/
-#   .securable/templates/
 #   .securable/scripts/
-#   opencode.json  (MCP server config + permissions)
+#   opencode.json  (permissions)
 # -----------------------------------------------------------------------------
 install_module() {
     local src="$1"
@@ -250,27 +250,20 @@ install_module() {
     done
 
     # Copy module files
+    if [[ -f "$src/config.json" ]]; then
+        cp "$src/config.json" "$dst_securable/config.json"
+        _gray "  Installed config.json -> $dst_securable/config.json"
+    fi
+
     if [[ -f "$src/instructions.md" ]]; then
         cp "$src/instructions.md" "$dst_securable/instructions.md"
         _gray "  Installed instructions.md -> $dst_securable/instructions.md"
     fi
 
-    # Write opencode.json at target root with MCP server config and permissions
+        # Write opencode.json at target root with permissions.
     cat > "$dst/opencode.json" <<'OCJSON'
 {
   "$schema": "https://opencode.ai/config.json",
-  "mcpServers": {
-    "securable": {
-      "command": "python",
-      "args": ["./.securable/tools/mcp_server.py"],
-      "env": {
-        "SECURABLE_DATA_DIR": "./.securable/data",
-        "SECURABLE_TEMPLATES_DIR": "./.securable/templates",
-        "SECURABLE_WORKFLOWS_DIR": "./.securable/workflows"
-      }
-    }
-  },
-  "instructions": "./.securable/instructions.md",
   "permission": {
     "edit": "allow",
     "bash": "allow"
@@ -322,33 +315,17 @@ FALLBACK
 # -----------------------------------------------------------------------------
 # resolve_fiassed_workflow_path  <module-source-dir>
 #
-# Resolves the PRD enhancement workflow used by fiassed mode.
+# Resolves module assets required by fiassed mode.
 # -----------------------------------------------------------------------------
 resolve_fiassed_workflow_path() {
     local src="$1"
-    local candidate
-    local candidates=(
-        "$src/workflows/prd-securability-enhanced.md"
-        "$src/workflows/requirements-analysis/prd-securability-enhanced.md"
-        "$src/workflows/prd-securability-enhancement.md"
-        "$src/workflows/requirements-analysis/prd-securability-enhancement.md"
-        "$src/workflows/prd-fiasse-asvs-enhancement.md"
-        "$src/workflows/requirements-analysis/prd-fiasse-asvs-enhancement.md"
-    )
+    local workflow="$src/workflows/prd-securability-enhance.workflow.json"
+    local runner="$src/scripts/run-workflow.js"
+    local tool="$src/tools/prd_securability_enhance.js"
 
-    for candidate in "${candidates[@]}"; do
-        if [[ -f "$candidate" ]]; then
-            printf '%s' "$candidate"
-            return 0
-        fi
-    done
-
-    if [[ -d "$src/workflows" ]]; then
-        candidate="$(find "$src/workflows" -type f -name '*.md' 2>/dev/null | grep -E 'prd.*secur.*enhanc|prd.*fiasse.*asvs.*enhanc' | sort | head -n 1 || true)"
-        if [[ -n "$candidate" ]]; then
-            printf '%s' "$candidate"
-            return 0
-        fi
+    if [[ -f "$workflow" && -f "$runner" && -f "$tool" ]]; then
+        printf '%s|%s|%s' "$workflow" "$runner" "$tool"
+        return 0
     fi
 
     return 1
@@ -357,20 +334,23 @@ resolve_fiassed_workflow_path() {
 # -----------------------------------------------------------------------------
 # get_fiassed_prd_content  <working-dir>  <module-source-dir>  <label>  <input-prd-file>
 #
-# Runs OpenCode to execute the PRD securability enhancement workflow and prints
-# the enhanced PRD markdown to stdout.
+# Runs the module-native workflow runner and prints the enhanced PRD markdown
+# to stdout.
 # -----------------------------------------------------------------------------
 get_fiassed_prd_content() {
     local working_dir="$1"
     local plugin_source="$2"
     local label="$3"
     local input_prd_file="$4"
+    local workflow_assets=""
     local workflow_path=""
 
-    if ! workflow_path="$(resolve_fiassed_workflow_path "$plugin_source")"; then
-        _red "Error: fiassed mode requires a PRD enhancement workflow in the plugin repository (expected under workflows/)."
+    if ! workflow_assets="$(resolve_fiassed_workflow_path "$plugin_source")"; then
+        _red "Error: fiassed mode requires module assets workflows/prd-securability-enhance.workflow.json, scripts/run-workflow.js, and tools/prd_securability_enhance.js."
         return 1
     fi
+
+    IFS='|' read -r workflow_path _runner_path _tool_path <<< "$workflow_assets"
 
     if [[ "$DRY_RUN" == true ]]; then
         _yellow "  [DRY-RUN] Would enhance PRD via fiassed workflow for: $label" >&2
@@ -379,35 +359,29 @@ get_fiassed_prd_content() {
         return 0
     fi
 
-    local workflow_content
-    workflow_content="$(cat "$workflow_path")"
-
-    local enhance_prompt_file
+        local workflow_input_file
+        local workflow_input_prd_file
     local enhance_log_file
     local enhanced_prd_file
     local enhanced_output
     local exit_code
+        local parse_status
 
-    enhance_prompt_file="$(mktemp /tmp/opencode_prd_enhance_XXXXXX.txt)"
+        workflow_input_file="$working_dir/fiassed-input.json"
+        workflow_input_prd_file="$working_dir/fiassed-input-prd.md"
     enhance_log_file="$working_dir/opencode-prd-enhancement.log"
     enhanced_prd_file="$working_dir/enhanced-prd.md"
 
-    cat > "$enhance_prompt_file" <<PROMPT
-Run the following PRD securability enhancement workflow exactly.
+        cp "$input_prd_file" "$workflow_input_prd_file"
 
-Output requirements:
-- Return ONLY the enhanced PRD markdown
-- Do not wrap output in code fences
-- Do not add explanations before or after
-
-=== WORKFLOW: prd securability enhanced ===
-${workflow_content}
-=== END WORKFLOW ===
-
-=== INPUT PRD ===
-$(cat "$input_prd_file")
-=== END INPUT PRD ===
-PROMPT
+        cat > "$workflow_input_file" <<JSON
+{
+    "workspaceRoot": ".",
+    "prdPath": "$(basename "$workflow_input_prd_file")",
+    "asvsLevel": 2,
+    "maxRequirementsPerFeature": 6
+}
+JSON
 
     write_step "Enhancing PRD via fiassed workflow for: $label"
     _gray "  Workflow   : $workflow_path"
@@ -416,21 +390,28 @@ PROMPT
     set +e
     enhanced_output="$(
         cd "$working_dir"
-        export OPENCODE_PERMISSION='{"edit": "allow", "bash": "allow"}'
-        opencode run -f "$enhance_prompt_file" 2>&1 | tee "$enhance_log_file"
+        node "./.securable/scripts/run-workflow.js" "prd-securability-enhance" "$(basename "$workflow_input_file")" 2>&1 | tee "$enhance_log_file"
     )"
     exit_code=$?
     set -e
 
-    rm -f "$enhance_prompt_file"
-
     if [[ $exit_code -ne 0 ]]; then
-        _red "Error: opencode PRD enhancement failed with exit code $exit_code for $label — check $enhance_log_file"
+        _red "Error: fiassed workflow runner failed with exit code $exit_code for $label — check $enhance_log_file"
         return 1
     fi
 
     if [[ -z "${enhanced_output//[[:space:]]/}" ]]; then
-        _red "Error: opencode PRD enhancement produced empty output for $label — check $enhance_log_file"
+        _red "Error: fiassed workflow produced empty output for $label — check $enhance_log_file"
+        return 1
+    fi
+
+    set +e
+    enhanced_output="$(printf '%s' "$enhanced_output" | node -e "let raw='';process.stdin.on('data',d=>raw+=d);process.stdin.on('end',()=>{try{const j=JSON.parse(raw);if(!j.ok){const msg=(j.error&&j.error.message)||j.reason||'workflow returned ok=false';process.stderr.write(msg);process.exit(2);}const prd=j.result&&j.result.enhancedPrd;if(typeof prd!=='string'||!prd.trim()){process.stderr.write('missing result.enhancedPrd');process.exit(3);}process.stdout.write(prd);}catch(e){process.stderr.write('invalid workflow JSON: '+e.message);process.exit(4);}});")"
+    parse_status=$?
+    set -e
+
+    if [[ $parse_status -ne 0 ]]; then
+        _red "Error: fiassed workflow output parse failed for $label — check $enhance_log_file"
         return 1
     fi
 
@@ -516,7 +497,7 @@ write_step "Checking prerequisites ..."
 if [[ "$DRY_RUN" == false ]]; then
     assert_tool "opencode"
     assert_tool "git"
-    assert_tool "python"
+    assert_tool "node"
 else
     _yellow "  [DRY-RUN] Skipping tool checks"
 fi
@@ -543,8 +524,11 @@ else
         mkdir -p "$PLUGIN_TEMP/data/asvs"
         mkdir -p "$PLUGIN_TEMP/templates"
         mkdir -p "$PLUGIN_TEMP/scripts"
+        echo "{}" > "$PLUGIN_TEMP/config.json"
         echo "# securable-opencode-module stub (dry-run)" > "$PLUGIN_TEMP/instructions.md"
-        echo "# prd securability enhanced (dry-run stub)" > "$PLUGIN_TEMP/workflows/prd-securability-enhanced.md"
+        echo "{}" > "$PLUGIN_TEMP/tools/prd_securability_enhance.js"
+        echo "console.log('{\"ok\":true,\"result\":{\"enhancedPrd\":\"dry-run stub\"}}')" > "$PLUGIN_TEMP/scripts/run-workflow.js"
+        echo "{}" > "$PLUGIN_TEMP/workflows/prd-securability-enhance.workflow.json"
         echo "{}" > "$PLUGIN_TEMP/opencode.json"
     else
         git clone "$PLUGIN_REPO" "$PLUGIN_TEMP"
@@ -643,13 +627,16 @@ PROMPT
             fi
 
             if [[ "${MODE_IS_FIASSED[$mode]}" == "true" ]]; then
-                get_fiassed_prd_content "$target_dir" "$PLUGIN_TEMP" "$lang_key / $mode" "$effective_prd_file" > "$effective_prd_file"
+                enhanced_prd_tmp="$(mktemp /tmp/opencode_effective_prd_enhanced_XXXXXX.md)"
+                get_fiassed_prd_content "$target_dir" "$PLUGIN_TEMP" "$lang_key / $mode" "$effective_prd_file" > "$enhanced_prd_tmp"
+                mv "$enhanced_prd_tmp" "$effective_prd_file"
             fi
 
             cat > "$PROMPT_TMP" <<PROMPT
 You are operating with the securable-opencode-module active (.securable/ directory
-and opencode.json are present in this directory). The MCP tools securability_review,
-secure_generate, and fiasse_lookup are available.
+and opencode.json are present in this directory). The module tools and workflows are
+available, including fiasse_lookup, securability_review, secure_generate, and
+prd_securability_enhance.
 
 The following securability engineering instructions are your primary
 constraints — treat them as non-negotiable design requirements.
@@ -678,7 +665,7 @@ $(cat "$effective_prd_file")
 PROMPT
         fi
 
-    rm -f "$effective_prd_file"
+        rm -f "$effective_prd_file"
 
         # Ensure OpenCode has write permissions
         if [[ "$DRY_RUN" == false ]]; then

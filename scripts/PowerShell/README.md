@@ -1,19 +1,22 @@
 # PRD Codegen Automation Scripts
 
-PowerShell automation for iterative prompt testing — generates a project from a PRD specification using three different AI coding tools and two security plugin configurations, producing a consistent folder tree for side-by-side comparison.
+PowerShell automation for iterative prompt testing — generates a project from a PRD specification using different AI coding tools and security plugin configurations, producing a consistent folder tree for side-by-side comparison.
 
 ## Overview
 
-Each script takes a single PRD file as input and runs AI-assisted code generation across three target languages and two modes:
+Each script takes a single PRD file as input and runs AI-assisted code generation across three target languages and variant modes:
 
 | Mode | Description |
-|------|-------------|
+| ---- | ----------- |
 | `rawdog` | Plain generation — no security plugin active |
 | `securable` | Generation with a FIASSE/SSEM security plugin applied |
+| `fiassed` | Securable generation with a pre-generation PRD securability enhancement pass (where supported) |
 
-Each script produces output under six folders:
+Each script produces output under language/mode folders. Where `fiassed` is supported, each language also includes a `fiassed/` folder.
 
-```
+Baseline structure:
+
+```text
 <OutputDir>/
 ├── aspnet/
 │   ├── rawdog/       ← ASP.NET Core (C#), plain generation
@@ -74,27 +77,35 @@ This script is most useful for **direct apples-to-apples comparison** between Cl
 ## Prerequisites
 
 ### All scripts
+
 - **PowerShell 5.1+** (included in Windows 10/11; verify with `$PSVersionTable.PSVersion`)
 - **Git** on `PATH` (for cloning the plugin repos)
 - A PRD file (`.md` or `.txt`) describing the project to generate
 
 ### `run-codegen-claude.ps1`
+
 - **Claude Code CLI** installed and authenticated
-  ```
+
+  ```powershell
   npm install -g @anthropic-ai/claude-code
   claude auth login
   ```
 
 ### `run-codegen-copilot.ps1` and `run-codegen-copilot-claude-plugin.ps1`
+
 - **GitHub Copilot CLI** installed and authenticated
-  ```
+
+  ```powershell
   npm install -g @githubnext/copilot-cli
   copilot auth login
   ```
+
 - An active GitHub Copilot subscription
 
 ### PowerShell execution policy (first-time setup)
+
 If scripts are blocked, run once in an elevated terminal:
+
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
@@ -108,7 +119,7 @@ All three scripts share the same parameter interface.
 ### Parameters
 
 | Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
+| --------- | -------- | ------- | ----------- |
 | `-PrdFile` | Yes | — | Path to your PRD file |
 | `-OutputDir` | No | Script-specific (see above) | Root folder for all generated output |
 | `-PluginRepo` | No | Canonical repo URL | Override the plugin git URL (e.g. a fork) |
@@ -152,7 +163,7 @@ Understanding how each script activates its plugin explains what the generated o
 
 Claude Code reads `CLAUDE.md` from the working directory automatically on startup. The script copies the full plugin tree into each `securable/` target directory before invoking `claude --print`, so the active plugin constraints come from the installed files rather than duplicated inline prompt content.
 
-```
+```text
 securable/
 ├── CLAUDE.md                   ← auto-read by Claude Code
 ├── .claude/
@@ -166,7 +177,7 @@ securable/
 
 Copilot CLI reads `.github/copilot-instructions.md` from the working directory automatically. The script copies the plugin's `.github/` folder into each `securable/` target directory. The instructions are also embedded inline in the prompt as a belt-and-suspenders fallback.
 
-```
+```text
 securable/
 └── .github/
     ├── copilot-instructions.md  ← auto-read by Copilot CLI
@@ -178,7 +189,7 @@ securable/
 
 Copilot CLI's skill discovery path includes `<project>/.claude/skills/` (position 3 in its resolution order). The script copies the Claude plugin's layout unchanged — no adapter needed. `CLAUDE.md` is included as additional project context, and the `/secure-generate` definition is embedded in the prompt.
 
-```
+```text
 securable/
 ├── CLAUDE.md                   ← included as project context
 ├── .claude/
@@ -195,7 +206,7 @@ securable/
 The folder structure is intentionally uniform across all three scripts so outputs can be diffed directly.
 
 | Comparison | Scripts to run | What it isolates |
-|---|---|---|
+| ---------- | -------------- | ---------------- |
 | Claude Code vs Copilot CLI (same plugin) | `run-codegen-claude.ps1` + `run-codegen-copilot-claude-plugin.ps1` | AI tool differences |
 | Copilot native plugin vs Claude plugin | `run-codegen-copilot.ps1` + `run-codegen-copilot-claude-plugin.ps1` | Plugin/instruction differences |
 | Baseline vs secured (any tool) | `rawdog/` vs `securable/` within any script's output | Plugin impact on code quality |

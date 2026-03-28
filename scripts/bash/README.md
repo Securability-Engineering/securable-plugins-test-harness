@@ -6,16 +6,20 @@ Bash automation for iterative prompt testing — generates a project from a PRD 
 
 ## Overview
 
-Each script takes a single PRD file as input and runs AI-assisted code generation across three target languages and two modes:
+Each script takes a single PRD file as input and runs AI-assisted code generation across three target languages and variant modes:
 
 | Mode | Description |
-|------|-------------|
+| ---- | ----------- |
 | `rawdog` | Plain generation — no security plugin active |
 | `securable` | Generation with FIASSE/SSEM security constraints applied |
+| `fiassed` | Securable generation with a pre-generation PRD securability enhancement pass |
 
-All scripts produce output under the same six-folder structure:
+Mode availability differs by script/plugin combination. Where `fiassed` is supported,
+output includes `<language>/fiassed/` alongside `rawdog` and `securable`.
 
-```
+All scripts produce output under a consistent language/mode structure:
+
+```text
 <output-dir>/
 ├── aspnet/
 │   ├── rawdog/       ← ASP.NET Core (C#), plain generation
@@ -72,7 +76,15 @@ Uses the `.github/` plugin layout (prompts, agents, `copilot-instructions.md`) t
 **Tool:** OpenCode CLI (`opencode run -f <prompt-file>`)
 **Plugin:** [`securable-opencode-module`](https://github.com/Xcaciv/securable-opencode-module)
 
-Drives OpenCode in non-interactive (`run`) mode. The module is installed into `.securable/` in each target directory, with an `opencode.json` configuring the MCP server, instructions, and permissions. Three MCP tools are available: `securability_review`, `secure_generate`, `fiasse_lookup`. Context fence uses `AGENTS.md` in rawdog directories.
+Drives OpenCode in non-interactive (`run`) mode. The module is installed into `.securable/` in each target directory, with an `opencode.json` configuring permissions. Module tools and workflows are consumed directly from `.securable/`. Context fence uses `AGENTS.md` in rawdog directories.
+
+For `fiassed` mode, the script runs the module-native workflow runner:
+
+```bash
+node ./.securable/scripts/run-workflow.js prd-securability-enhance <input-json>
+```
+
+The workflow's `result.enhancedPrd` is used as the PRD for generation.
 
 **Default output directory:** `./opencode-codegen-output`
 
@@ -81,31 +93,39 @@ Drives OpenCode in non-interactive (`run`) mode. The module is installed into `.
 ## Prerequisites
 
 ### All scripts
+
 - **bash 4+** (verify with `bash --version`; macOS ships bash 3 by default — install via Homebrew: `brew install bash`)
 - **Git** on `PATH`
 - **`realpath`** — included in GNU coreutils (Linux); on macOS install with `brew install coreutils`
 - A PRD file (`.md` or `.txt`) describing the project to generate
 
 ### `run-codegen-claude.sh`
+
 - **Claude Code CLI** installed and authenticated:
+
   ```bash
   npm install -g @anthropic-ai/claude-code
   claude auth login
   ```
 
 ### `run-codegen-copilot-claude-plugin.sh` / `run-codegen-copilot.sh`
+
 - **GitHub Copilot CLI** installed and authenticated:
+
   ```bash
   npm install -g @githubnext/copilot-cli
   copilot auth login
   ```
+
 - An active GitHub Copilot subscription
 
 ### `run-codegen-opencode.sh`
+
 - **OpenCode CLI** installed: see [opencode.ai](https://opencode.ai/docs/)
-- **Python 3.10+** on `PATH` (required by the MCP server)
+- **Node.js 18+** on `PATH` (required by securable-opencode-module workflow runner)
 
 ### Make scripts executable (first-time setup)
+
 ```bash
 chmod +x run-codegen-*.sh
 ```
@@ -119,7 +139,7 @@ All scripts share the same flag interface.
 ### Options
 
 | Flag | Required | Default | Description |
-|------|----------|---------|-------------|
+| ---- | -------- | ------- | ----------- |
 | `--prd <file>` | Yes (unless `--clean`) | — | Path to your PRD file |
 | `--output-dir <dir>` | No | Script-specific (see above) | Root folder for all generated output |
 | `--plugin-repo <url>` | No | Canonical repo URL | Override the plugin git URL (e.g. a fork) |
@@ -179,7 +199,7 @@ Always run with `--dry-run` first to verify paths and review the prompts before 
 
 Claude Code reads `CLAUDE.md` from the working directory on startup. The installed layout:
 
-```
+```text
 securable/
 ├── CLAUDE.md                    ← auto-read by Claude Code on startup
 ├── .claude/
@@ -197,7 +217,7 @@ Copilot CLI discovers `<project>/.claude/skills/` automatically. The installed l
 
 Uses Copilot-native `.github/` structure:
 
-```
+```text
 securable/
 └── .github/
     ├── copilot-instructions.md  ← auto-read by Copilot CLI
@@ -209,15 +229,14 @@ securable/
 
 Module is installed into `.securable/`, with `opencode.json` at the project root:
 
-```
+```text
 securable/
-├── opencode.json                ← MCP server config + permissions
+├── opencode.json                ← permission config
 └── .securable/
-    ├── instructions.md          ← system instructions
-    ├── tools/mcp_server.py      ← MCP server (Python 3.10+)
-    ├── workflows/               ← review workflow definitions
-    ├── data/                    ← FIASSE/ASVS reference data
-    └── templates/               ← code generation templates
+  ├── config.json
+  ├── tools/                   ← includes prd_securability_enhance.js
+  ├── workflows/               ← includes prd-securability-enhance.workflow.json
+  └── scripts/run-workflow.js  ← workflow runner
 ```
 
 ---
@@ -225,10 +244,10 @@ securable/
 ## Comparing Results
 
 | Comparison | Scripts to run | What it isolates |
-|---|---|---|
+| ---------- | -------------- | ---------------- |
 | Claude vs Copilot (same plugin) | claude + copilot-claude-plugin | AI tool behaviour under identical constraints |
 | Copilot plugin variants | copilot-claude-plugin vs copilot | Plugin layout impact (`.claude/` vs `.github/`) |
-| OpenCode vs others | opencode + any other | MCP-based vs file-based plugin activation |
+| OpenCode vs others | opencode + any other | workflow/tool based module activation vs file-based plugin activation |
 | Baseline vs secured (any tool) | `rawdog/` vs `securable/` within one script | Plugin impact on code quality |
 
 A useful starting point is diffing the `README.md` files inside each `securable/` folder — all scripts ask the AI to include an SSEM attribute coverage summary there.
@@ -267,7 +286,7 @@ Run with `--dry-run` to confirm the clone target resolves correctly, then inspec
 
 - [securable-claude-plugin](https://github.com/Xcaciv/securable-claude-plugin) — FIASSE/SSEM plugin for Claude Code (and Copilot CLI)
 - [securable-copilot](https://github.com/Xcaciv/securable-copilot) — FIASSE/SSEM plugin for Copilot CLI (`.github/` layout)
-- [securable-opencode-module](https://github.com/Xcaciv/securable-opencode-module) — FIASSE/SSEM module for OpenCode (MCP-based)
+- [securable-opencode-module](https://github.com/Xcaciv/securable-opencode-module) — FIASSE/SSEM module for OpenCode workflow/tool integration
 - [FIASSE RFC](https://github.com/Xcaciv/securable_software_engineering/blob/main/docs/FIASSE-RFC.md) — Framework for Integrating Application Security into Software Engineering
 - [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code)
 - [GitHub Copilot CLI documentation](https://docs.github.com/en/copilot/reference/copilot-cli-reference)
