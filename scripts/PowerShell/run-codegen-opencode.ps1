@@ -2,7 +2,8 @@
 <#
 .SYNOPSIS
     Automates OpenCode to generate a project from a PRD in 3 languages,
-    each with a "rawdog" (plain) and "securable" (FIASSE module) variant.
+    each with a "rawdog" (plain), "securable" (FIASSE module), and
+    "fiassed" (securable plus PRD enhancement) variant.
 
 .DESCRIPTION
     Produces the following folder structure:
@@ -10,12 +11,15 @@
             aspnet/
                 rawdog/     <- Plain OpenCode generation
                 securable/  <- Generation with securable-opencode-module active
+                fiassed/    <- Securable + PRD securability enhancement workflow
             jsp/
                 rawdog/
                 securable/
+                fiassed/
             node/
                 rawdog/
                 securable/
+                fiassed/
 
     Plugin activation mechanism (securable mode):
         The script clones securable-opencode-module once, then copies the
@@ -44,6 +48,12 @@
     Resume a previous run without wiping existing target directories.
     Useful when token windows or rate limits interrupt generation.
 
+.PARAMETER Modes
+        One or more generation modes to run. Supported values:
+            rawdog, securable, fiassed
+        Accepts comma-separated values and repeated arguments.
+        Defaults to all three modes.
+
 .PARAMETER Clean
     Remove the cached plugin clone and .codegen-finished flags from
     the output directory, then exit.  No generation is performed.
@@ -70,6 +80,10 @@ param(
 
     [switch]$Resume,
 
+    [Parameter(ParameterSetName = 'Run')]
+    [ValidateCount(1, 32)]
+    [string[]]$Modes = @("rawdog", "securable", "fiassed"),
+
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
 )
@@ -87,6 +101,26 @@ $Languages = [ordered]@{
 }
 
 $FinishedFlagFileName = ".codegen-finished"
+
+$ModeDefinitions = [ordered]@{
+    "rawdog" = @{
+        IsSecurable  = $false
+        IsFiassed    = $false
+        SummaryLabel = "plain OpenCode generation"
+    }
+    "securable" = @{
+        IsSecurable  = $true
+        IsFiassed    = $false
+        SummaryLabel = "FIASSE/SSEM secured generation"
+    }
+    "fiassed" = @{
+        IsSecurable  = $true
+        IsFiassed    = $true
+        SummaryLabel = "FIASSE/SSEM secured generation with PRD securability enhancement"
+    }
+}
+
+$SupportedModes = @($ModeDefinitions.Keys)
 
 # ---------------------------------------------------------------------------
 # Helper: Coloured status line
@@ -340,6 +374,135 @@ function Get-SecurableInstructions([string]$PluginSource) {
     ) -join "`n"
 }
 
+# ---------------------------------------------------------------------------
+# Helper: Resolve the PRD enhancement workflow used by fiassed mode.
+# ---------------------------------------------------------------------------
+function Resolve-FiassedWorkflowPath {
+    param(
+        [string]$PluginSource
+    )
+
+    $candidates = @(
+        (Join-Path $PluginSource "workflows\prd-securability-enhanced.md"),
+        (Join-Path $PluginSource "workflows\requirements-analysis\prd-securability-enhanced.md"),
+        (Join-Path $PluginSource "workflows\prd-securability-enhancement.md"),
+        (Join-Path $PluginSource "workflows\requirements-analysis\prd-securability-enhancement.md"),
+        (Join-Path $PluginSource "workflows\prd-fiasse-asvs-enhancement.md"),
+        (Join-Path $PluginSource "workflows\requirements-analysis\prd-fiasse-asvs-enhancement.md")
+    )
+
+    foreach ($path in $candidates) {
+        if (Test-Path $path -PathType Leaf) {
+            return $path
+        }
+    }
+
+    $workflowDir = Join-Path $PluginSource "workflows"
+    if (Test-Path $workflowDir -PathType Container) {
+        $fallback = Get-ChildItem -Path $workflowDir -Filter "*.md" -Recurse -File |
+            Where-Object {
+                $_.Name -match "prd.*secur.*enhanc" -or
+                $_.Name -match "prd.*fiasse.*asvs.*enhanc"
+            } |
+            Sort-Object -Property FullName |
+            Select-Object -First 1
+
+        if ($fallback) {
+            return $fallback.FullName
+        }
+    }
+
+    return $null
+}
+
+# ---------------------------------------------------------------------------
+# Helper: Run fiassed PRD enhancement with OpenCode and return enhanced PRD.
+# ---------------------------------------------------------------------------
+function Get-FiassedPrdContent {
+    param(
+        [string]$WorkingDir,
+        [string]$PluginSource,
+        [string]$OriginalPrdContent,
+        [string]$Label
+    )
+
+    $workflowPath = Resolve-FiassedWorkflowPath -PluginSource $PluginSource
+    if (-not $workflowPath) {
+        throw "fiassed mode requires a PRD enhancement workflow in the plugin repository. Expected a workflow similar to 'prd-securability-enhanced.md' under workflows/."
+    }
+
+    if ($DryRun) {
+        Write-Host "  [DRY-RUN] Would enhance PRD via fiassed workflow for: $Label" -ForegroundColor Yellow
+        Write-Host "  [DRY-RUN] Workflow file: $workflowPath" -ForegroundColor Yellow
+        return $OriginalPrdContent
+    }
+
+    $workflowContent = Get-Content $workflowPath -Raw
+    $enhancePrompt = @(
+        "Run the following PRD securability enhancement workflow exactly.",
+        "",
+        "Output requirements:",
+        "- Return ONLY the enhanced PRD markdown",
+        "- Do not wrap output in code fences",
+        "- Do not add explanations before or after",
+        "",
+        "=== WORKFLOW: prd securability enhanced ===",
+        $workflowContent,
+        "=== END WORKFLOW ===",
+        "",
+        "=== INPUT PRD ===",
+        $OriginalPrdContent,
+        "=== END INPUT PRD ==="
+    ) -join "`n"
+
+    $enhanceLogFile = Join-Path $WorkingDir "opencode-prd-enhancement.log"
+    $enhancedPrdFile = Join-Path $WorkingDir "enhanced-prd.md"
+
+    Write-Step "Enhancing PRD via fiassed workflow for: $Label" "Green"
+    Write-Host "  Workflow   : $workflowPath"
+    Write-Host "  Log file   : $enhanceLogFile"
+
+    Push-Location $WorkingDir
+    try {
+        $promptFile = Join-Path $env:TEMP "opencode_prd_enhance_$([System.IO.Path]::GetRandomFileName()).txt"
+        try {
+            Set-Content -Path $promptFile -Value $enhancePrompt -Encoding UTF8
+
+            $env:OPENCODE_PERMISSION = '{"edit": "allow", "bash": "allow"}'
+
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $enhancedOutput = (& cmd /c "opencode run < $promptFile" 2>&1 | Tee-Object -FilePath $enhanceLogFile)
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+                Remove-Item Env:\OPENCODE_PERMISSION -ErrorAction SilentlyContinue
+            }
+
+            if ($LASTEXITCODE -ne 0) {
+                throw "opencode PRD enhancement failed with exit code $LASTEXITCODE for $Label - check $enhanceLogFile"
+            }
+
+            $enhancedContent = (($enhancedOutput | Out-String).Trim())
+            if ([string]::IsNullOrWhiteSpace($enhancedContent)) {
+                throw "opencode PRD enhancement produced empty output for $Label - check $enhanceLogFile"
+            }
+
+            Set-Content -Path $enhancedPrdFile -Value $enhancedContent -Encoding UTF8
+            Write-Host "  Enhanced PRD written: $enhancedPrdFile" -ForegroundColor DarkGray
+
+            return $enhancedContent
+        }
+        finally {
+            if (Test-Path $promptFile) { Remove-Item -Force $promptFile }
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 # ===========================================================================
 # MAIN
 # ===========================================================================
@@ -374,6 +537,26 @@ if ($Clean) {
     return
 }
 
+$NormalizedModes = [System.Collections.Generic.List[string]]::new()
+foreach ($modeArg in $Modes) {
+    foreach ($candidate in ($modeArg -split ",")) {
+        $normalized = $candidate.Trim().ToLowerInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            $NormalizedModes.Add($normalized)
+        }
+    }
+}
+
+$Modes = @($NormalizedModes | Select-Object -Unique)
+if ($Modes.Count -eq 0) {
+    throw "At least one mode must be provided via -Modes. Available modes: $($SupportedModes -join ', ')"
+}
+
+$InvalidModes = @($Modes | Where-Object { $_ -notin $SupportedModes })
+if ($InvalidModes.Count -gt 0) {
+    throw "Unsupported mode(s): $($InvalidModes -join ', '). Available modes: $($SupportedModes -join ', ')"
+}
+
 $PrdFile = Resolve-Path $PrdFile | Select-Object -ExpandProperty Path
 
 Write-Step "Starting OpenCode codegen run" "Magenta"
@@ -381,6 +564,7 @@ Write-Host "  PRD file   : $PrdFile"
 Write-Host "  Output dir : $OutputDir"
 Write-Host "  Dry run    : $DryRun"
 Write-Host "  Resume     : $Resume"
+Write-Host "  Modes      : $($Modes -join ', ')"
 
 # ---------------------------------------------------------------------------
 # Prerequisite check
@@ -419,6 +603,7 @@ if (Test-Path $PluginTemp) {
         New-Item -ItemType Directory -Force -Path (Join-Path $PluginTemp "templates") | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $PluginTemp "scripts") | Out-Null
         Set-Content (Join-Path $PluginTemp "instructions.md") "# securable-opencode-module stub (dry-run)"
+        Set-Content (Join-Path $PluginTemp "workflows\prd-securability-enhanced.md") "# prd securability enhanced (dry-run stub)"
         Set-Content (Join-Path $PluginTemp "opencode.json") "{}"
     } else {
         git clone $PluginRepo $PluginTemp
@@ -434,7 +619,8 @@ $SecurableInstructions = Get-SecurableInstructions $PluginTemp
 foreach ($langKey in $Languages.Keys) {
     $langLabel = $Languages[$langKey]
 
-    foreach ($mode in @("rawdog", "securable")) {
+    foreach ($mode in $Modes) {
+        $modeConfig = $ModeDefinitions[$mode]
 
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
         $finishedFlagPath = Join-Path $targetDir $FinishedFlagFileName
@@ -472,7 +658,7 @@ foreach ($langKey in $Languages.Keys) {
         # fence. OpenCode uses AGENTS.md as the project context file, so placing
         # one here prevents it from walking up the directory tree and loading
         # module files from parent directories.
-        if ($mode -eq "rawdog") {
+        if (-not $modeConfig.IsSecurable) {
             $fenceContent = @(
                 "# codegen-test: rawdog baseline",
                 "# This file exists only to prevent context from parent directories",
@@ -482,7 +668,8 @@ foreach ($langKey in $Languages.Keys) {
         }
 
         # ---- Build the prompt ----
-        if ($mode -eq "rawdog") {
+        $effectivePrdContent = $PrdContent
+        if (-not $modeConfig.IsSecurable) {
             $prompt = @(
                 "Generate a complete, working $langLabel project based on the following PRD.",
                 "",
@@ -495,12 +682,20 @@ foreach ($langKey in $Languages.Keys) {
                 "",
                 "PRD:",
                 "---",
-                $PrdContent,
+                $effectivePrdContent,
                 "---"
             ) -join "`n"
         } else {
             # Install module files first so OpenCode auto-loads the MCP server
             Install-SecurableModule -PluginSource $PluginTemp -TargetDir $targetDir
+
+            if ($modeConfig.IsFiassed) {
+                $effectivePrdContent = Get-FiassedPrdContent `
+                    -WorkingDir $targetDir `
+                    -PluginSource $PluginTemp `
+                    -OriginalPrdContent $PrdContent `
+                    -Label "$langKey / $mode"
+            }
 
             $prompt = @(
                 "You are operating with the securable-opencode-module active (.securable/ directory",
@@ -529,7 +724,7 @@ foreach ($langKey in $Languages.Keys) {
                 "",
                 "PRD:",
                 "---",
-                $PrdContent,
+                $effectivePrdContent,
                 "---"
             ) -join "`n"
         }
@@ -554,8 +749,9 @@ Write-Host "Generated folder structure:" -ForegroundColor White
 foreach ($langKey in $Languages.Keys) {
     Write-Host "  $OutputDir\" -NoNewline -ForegroundColor Gray
     Write-Host "$langKey\" -ForegroundColor Cyan
-    Write-Host "    rawdog\     - plain OpenCode generation" -ForegroundColor Gray
-    Write-Host "    securable\  - FIASSE/SSEM secured generation" -ForegroundColor Gray
+    foreach ($mode in $Modes) {
+        Write-Host "    $mode\  - $($ModeDefinitions[$mode].SummaryLabel)" -ForegroundColor Gray
+    }
 }
 Write-Host ""
 Write-Host "Each folder contains an opencode-output.log with the full CLI response." -ForegroundColor DarkGray
