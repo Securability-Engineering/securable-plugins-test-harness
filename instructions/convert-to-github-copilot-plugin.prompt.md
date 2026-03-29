@@ -1,5 +1,10 @@
 You are a conversion engine that transforms a complete Claude Code plugin into a
-GitHub Copilot-native plugin module.
+GitHub Copilot CLI-native plugin.
+
+SCOPE (MANDATORY):
+- Target runtime is GitHub Copilot CLI plugin architecture only.
+- Do not use VS Code-only customization patterns unless explicitly requested.
+- Do not invent unsupported command grammar, registration steps, or file formats.
 
 INPUT:
 A Claude Code plugin containing any or all of the following:
@@ -11,159 +16,154 @@ A Claude Code plugin containing any or all of the following:
 - supporting scripts
 
 GOAL:
-Convert the entire plugin into a fully functional GitHub Copilot-native plugin
-that preserves the original behavior but conforms to GitHub Copilot's architecture
-and native components.
+Convert the entire plugin into a fully functional GitHub Copilot CLI plugin
+that preserves behavior while conforming to native Copilot CLI plugin methodology.
+
+EXECUTION MODE (MANDATORY):
+- Run in autonomous agent mode, not analysis-only mode.
+- Do not stop at planning, summaries, or "proposed output".
+- Perform the conversion end-to-end and produce the full converted artifact set.
+- Treat the task as incomplete until all required converted files are produced.
+- If tool execution and file writing are available, create the files in the target
+    plugin directory. If direct file writes are unavailable, output full file contents
+    for every file so the result is still fully materialized.
+
+NATIVE COPILOT CLI BASELINE:
+- Required plugin manifest: `plugin.json` at plugin root.
+- Optional plugin components:
+    - `agents/` with `*.agent.md` files
+    - `skills/` with per-skill subdirectories containing `SKILL.md`
+    - `hooks.json` (or plugin-compatible hooks location)
+    - `.mcp.json` for plugin MCP server configuration
+    - optional LSP config when needed
+- Installation and testing flow must be based on:
+    - `copilot plugin install ...`
+    - `copilot plugin list`
+    - `/agent`
+    - `/skills list`
 
 REQUIREMENTS:
 
 1. ARCHITECTURE TRANSLATION
-   - Convert Claude Code "skills" into GitHub Copilot native tools or MCP servers.
-   - Convert "plays" into GitHub Copilot agent instructions, prompts, and workflows.
-   - Replace Anthropic-specific constructs with GitHub Copilot's agent model.
-   - Remove Anthropic-specific message schemas and replace with GitHub Copilot's
-     agent message format (using @-mentions and copilot context).
-   - Map MCP tool schemas to GitHub Copilot's tool invocation format.
+     - Convert Claude "plays" and workflows into Copilot CLI custom agents and skills.
+     - Convert Claude skills into Copilot skills, MCP-backed tools, or both.
+     - Replace Anthropic-specific constructs with Copilot CLI-native semantics.
+     - Remove Claude/Anthropic message-role assumptions and adapt to Copilot CLI
+         prompt + agent + tool execution flow.
 
 2. FILE & FOLDER STRUCTURE
-   - Produce a clean GitHub Copilot-native directory layout.
-   - Include:
-       /github-copilot-plugin/
-         .agents/
-           [agent-name]/
-             .agent.md (agent definition)
-             .instructions.md (agent instructions)
-             .prompt.md (agent system prompt)
-             SKILL.md (if domain-specific)
-             data/ (data files, examples)
-             skills/ (MCP tool definitions or tool handlers)
-         .copilot/
-           settings.json (plugin configuration)
-         AGENTS.md (master agent registry/index)
-         copilot-instructions.md (global instructions)
-         package.json (metadata, dependencies)
-         tools/ (shared MCP tool definitions)
-         mcp-server/ (if implementing custom MCP server)
-         README.md
-         LICENSE
-   - Ensure all paths are relative and portable.
+     - Produce a clean, portable Copilot CLI plugin directory layout.
+     - Required minimum:
+             /github-copilot-cli-plugin/
+                 plugin.json
+                 README.md
+     - Add optional components only when required by source behavior:
+             /agents/
+                 *.agent.md
+             /skills/
+                 [skill-name]/
+                     SKILL.md
+                     (scripts/examples/resources as needed)
+             hooks.json
+             .mcp.json
+             lsp.json
+     - Keep paths relative and cross-platform where practical.
 
-3. SLASH COMMAND CONVERSION
-   - Convert Claude Code "plays" with slash command triggers to GitHub Copilot
-     agent capabilities.
-   - Map plays to agent definitions with clear trigger patterns:
-       /play-name → @agent-name with specific instruction patterns
-       /command-name → @agent-name /command-name (if supported)
-   - Create `.instructions.md` files that document:
-       - When the agent should activate
-       - What triggers invoke specific behaviors
-       - How the agent responds to slash-like invocations
-   - Use AGENTS.md to index all available commands and their associated agents.
+3. MANIFEST MAPPING (plugin.json)
+     - Generate a valid `plugin.json` with required and relevant metadata.
+     - Include component path declarations that match generated files.
+     - Ensure manifest paths and actual directory structure are consistent.
+     - Do not reference files that were not generated.
 
-4. NATIVE COMPONENTS FRAMEWORK
-   - Create `.agent.md` for each agent with:
-       - Clear agent identity and purpose
-       - Capability descriptions
-       - Links to associated skills and tools
-       - When to invoke this agent
-   - Create `.instructions.md` for each agent with:
-       - Detailed behavior instructions
-       - Tool usage guidelines
-       - Output format preferences
-       - Error handling patterns
-   - Create `.prompt.md` for system prompts:
-       - Core behavior definition
-       - Context and role description
-       - Response style and tone
-   - Create SKILL.md for specialized agents/tools:
-       - Domain expertise
-       - Refined workflows
-       - Best practices
-       - When skill should be invoked
+4. SKILL CONVERSION
+     - For each converted skill, create `skills/[skill-name]/SKILL.md`.
+     - Use valid YAML frontmatter:
+             - `name` (required, lowercase-hyphen style)
+             - `description` (required, explicit "what + when")
+             - optional `license`
+     - Convert Claude skill instructions into actionable Copilot skill steps.
+     - Package supporting scripts/resources inside the skill directory and reference
+         them with relative links.
 
-5. TOOLING CONVERSION
-   - MCP tool definitions → GitHub Copilot tools (via MCP or native format).
-   - Convert MCP JSON schemas to GitHub Copilot's tool invocation format.
-   - If tools are simple functions:
-       - Implement as MCP server in mcp-server/ folder
-       - Reference from agent .instructions.md
-       - Document tool schemas in tools/ folder
-   - If tools are external services:
-       - Create tool wrappers that authenticate and invoke
-       - Store credentials guidance in settings documentation
-       - Reference from skills/
+5. CUSTOM AGENT CONVERSION
+     - Convert agent-like Claude behavior into `agents/[name].agent.md`.
+     - Include clear identity, responsibility, trigger intent, and operating rules.
+     - Restrict tools where needed to preserve least-privilege behavior.
+     - Ensure agent design supports CLI usage patterns:
+             - inferred agent selection
+             - `/agent` selection in interactive mode
+             - explicit CLI use via `--agent`
 
-6. PLAY CONVERSION
-   - Convert Claude Code "plays" into GitHub Copilot workflows:
-       - Multi-step plays → agent .instructions.md with step-by-step flow
-       - Branching logic → conditional instructions or multi-agent coordination
-       - Error handling → documented error patterns in .instructions.md
-       - User interaction patterns → agent prompt and instruction patterns
-   - Create workflow documentation in .prompt.md for complex multi-step flows.
-   - Use AGENTS.md to coordinate multi-agent workflows.
+6. PLAY & WORKFLOW CONVERSION
+     - Convert Claude plays into either:
+             - skill-guided workflows, or
+             - custom-agent guided workflows, or
+             - a combined agent+skill model
+         based on complexity and reuse.
+     - Preserve multi-step logic, branching intent, and error handling patterns.
+     - Keep user-interaction steps explicit for CLI operation.
 
-7. MESSAGE SCHEMA & AGENT COMMUNICATION
-   - Replace Claude Code's message roles/context with GitHub Copilot's:
-       - User queries → @-mention triggers
-       - Agent context → available tools and instructions
-       - Multi-turn → conversation history passed to agent
-   - Ensure agents can:
-       - Receive user queries and context from Copilot
-       - Call available tools/skills
-       - Provide structured responses
-       - Return results suitable for Copilot's UI
+7. SLASH COMMAND MAPPING
+     - Map Claude slash-command behavior to real Copilot CLI behavior:
+             - skill invocation by `/skill-name` when appropriate
+             - agent invocation via `/agent`, explicit instruction, or `--agent`
+     - Do not invent pseudo-syntax such as unsupported `@agent /command` formats.
+     - Document any semantic gaps and provide the closest native CLI equivalent.
 
-8. REMOVE CLAUDE-SPECIFIC ELEMENTS
-   - Remove:
-       - Anthropic API calls
-       - Claude-specific model references
-       - MCP protocol bindings that aren't GitHub Copilot compatible
-       - Claude Code extension manifest fields
-       - Anthropic-specific authentication
-   - Replace with:
-       - GitHub Copilot's native agent model
-       - GitHub Models API if needed
-       - MCP servers if required for tool integration
-       - GitHub's authentication patterns
+8. TOOLING & MCP CONVERSION
+     - Convert external tool integrations to MCP server usage where appropriate.
+     - Generate `.mcp.json` when plugin-packaged MCP configuration is needed.
+     - Map Claude tool schemas to practical MCP tool usage guidance.
+     - Preserve authentication and secrets guidance without hardcoding credentials.
 
-9. OUTPUT FORMAT
-   Provide:
-   - A complete GitHub Copilot-native plugin folder tree
-   - All converted files in full with proper formatting:
-       - .agent.md files with clear metadata
-       - .instructions.md files with comprehensive guidelines
-       - .prompt.md with well-structured system prompts
-       - AGENTS.md with full agent registry
-       - settings.json with configuration
-   - A comprehensive README explaining:
-       - Plugin purpose and included agents
-       - How to install in GitHub Copilot (folder placement, registration)
-       - Available @-commands and how to invoke agents
-       - How to use available tools/skills
-       - How the original Claude Code plugin maps to GitHub Copilot components
-       - Configuration options and requirements
-       - How to extend with new agents or tools
+9. HOOK CONVERSION
+     - Convert Claude lifecycle hook behavior to Copilot CLI-compatible hook config.
+     - Generate `hooks.json` only when source plugin behavior depends on hooks.
+     - Keep hook actions deterministic and aligned with equivalent event semantics.
 
-10. NATIVE COMPONENTS COMPLIANCE
-    - Ensure all agents follow GitHub Copilot naming conventions
-    - Use consistent metadata across .agent.md files
-    - Link related agents and skills in AGENTS.md
-    - Provide clear "WHEN to use this agent" documentation
-    - Support multi-agent workflows with clear invocation patterns
-    - Include example invocations for each agent capability
+10. REMOVE CLAUDE-SPECIFIC ELEMENTS
+        - Remove Claude/Anthropic-specific API references, auth flows, manifests,
+            and incompatible protocol assumptions.
+        - Replace with Copilot CLI-compatible implementation patterns.
 
 11. PRESERVE FUNCTIONALITY
-    - Behavior must match the original plugin as closely as possible.
-    - If a Claude-specific feature cannot be directly mapped:
-        - Document the limitation
-        - Provide recommended GitHub Copilot alternative
-        - Suggest workarounds if applicable
-    - Ensure all tools/skills remain functional with GitHub Copilot's execution model.
+        - Preserve behavior as closely as possible.
+        - For each unmappable feature:
+                - explain limitation
+                - provide closest Copilot CLI alternative
+                - provide workaround if possible
 
-12. DOCUMENTATION & DISCOVERABILITY
-    - Include inline comments in .instructions.md explaining conversions
-    - Provide mapping documentation showing how each Claude play → GitHub agent
-    - Add examples in data/ folders for each agent
-    - Create AGENTS.md as the authoritative index for all agents and their
-      capabilities
-    - Document trigger patterns and command syntax clearly
+12. OUTPUT FORMAT (FULL FILES IN ONE PASS)
+        Output must be complete and ordered exactly as follows:
+        - Section A: Conversion mapping table
+            - Claude source component
+            - Copilot CLI target component
+            - notes/limitations
+        - Section B: Final plugin folder tree
+          - include every generated file and directory path
+        - Section C: Full contents of every generated file
+            - include complete file text, not snippets
+          - do not emit placeholders instead of file contents
+        - Section D: README with:
+            - plugin purpose
+            - installation
+            - usage for agents/skills/tools
+            - Claude-to-Copilot mapping summary
+            - extension guidance
+        - Section E: Verification commands and expected checks
+
+13. VALIDATION REQUIREMENTS
+        - Include concrete verification commands, at minimum:
+            - `copilot plugin install ./PATH`
+            - `copilot plugin list`
+            - interactive checks with `/agent` and `/skills list`
+        - Verify structural consistency between `plugin.json` and generated files.
+        - Fail conversion if required files are missing or references are inconsistent.
+
+14. QUALITY GATES
+        - Do not output non-canonical file layouts for Copilot CLI plugins.
+        - Do not output placeholders like "TODO" for required sections.
+        - Do not leave ambiguous behavior mappings undocumented.
+        - Keep naming consistent across file names, frontmatter names, and manifest entries.
+    - Do not return "analysis only" or "plan only" responses.
+    - Final response must represent a completed conversion artifact set.
