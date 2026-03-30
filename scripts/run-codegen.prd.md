@@ -13,7 +13,6 @@ Automate an LLM-powered CLI tool to generate a complete project from a PRD file 
 |---------|-------------|
 | **rawdog** | Plain generation — no security plugin, no FIASSE constraints. |
 | **securable** | Generation with the `[securable_plugin]` active, enforcing FIASSE/SSEM securability attributes. |
-| **fiassed** | Generation with the `[securable_plugin]` active plus a PRD enhancement step that applies FIASSE+ASVS guidance before code generation. |
 
 The scripts exist to enable reproducible, side-by-side comparison of plain vs. security-enhanced code generation across languages and LLM CLI tools.
 
@@ -25,10 +24,10 @@ Scripts are parameterised by the following variable dimensions. Implementations 
 
 | Placeholder | Description | Known Values |
 |---|---|---|
-| `[llm_cli_tool]` | The LLM CLI executable name | `claude`, `copilot` |
+| `[llm_cli_tool]` | The LLM CLI executable name | `claude`, `copilot`, `opencode` |
 | `[llm_cli_tool_label]` | Human-readable name for status messages | `Claude Code`, `GitHub Copilot CLI` |
 | `[shell]` | Script language / shell | `PowerShell`, `bash` |
-| `[securable_plugin]` | The security plugin used for "securable" runs | `securable-claude-plugin`, `securable-copilot` |
+| `[securable_plugin]` | The security plugin used for "securable" runs | `securable-claude-plugin`, `securable-copilot`, `securable-opencode-module` |
 | `[plugin_repo_url]` | Git clone URL for the plugin | `https://github.com/Xcaciv/securable-claude-plugin.git`, `https://github.com/Xcaciv/securable-copilot.git` |
 | `[plugin_temp_dir_name]` | Subfolder name for the cached plugin clone | `_plugin_temp`, `_securable_claude_plugin_temp`, `_securable_copilot_temp` |
 | `[default_output_dir]` | Default root output folder | `./codegen-output`, `./copilot-codegen-output` |
@@ -55,18 +54,12 @@ All implementations MUST produce the following directory layout under `[default_
 │       ├── [output_log_filename]
 │       ├── [finished_flag_file]
 │       └── <generated project files + plugin assets...>
-│   └── fiassed/               # securable + PRD enhancement play/workflow
-│       ├── [output_log_filename]
-│       ├── [finished_flag_file]
-│       └── <generated project files + plugin assets...>
 ├── jsp/
 │   ├── rawdog/
 │   ├── securable/
-│   └── fiassed/
 └── node/
     ├── rawdog/
-    ├── securable/
-    └── fiassed/
+    └── securable/
 ```
 
 ---
@@ -82,7 +75,7 @@ All implementations MUST accept the following parameters. The flag syntax is she
 | `PluginRepo` / `--plugin-repo` | No | `[plugin_repo_url]` | Git URL of the `[securable_plugin]` repository. |
 | `DryRun` / `--dry-run` | No | `false` | Print what would run without invoking `[llm_cli_tool]`. Creates stub plugin structures so the full flow can be traced. |
 | `Resume` / `--resume` | No | `false` | Preserve existing output directories and skip variations that have a `[finished_flag_file]`. Useful when token limits or rate limits interrupt a run. |
-| `Modes` / `--modes` | No | `rawdog,securable` | One or more generation modes to execute. Accepts a list (e.g., `rawdog,securable` or repeated flags). Implementations MUST validate all requested modes and fail early if any mode is unsupported. Error text MUST include the list of available modes. Baseline supported modes are `rawdog` and `securable`; implementations may additionally support `fiassed` when enhancement assets are available for the selected plugin/tool pair. |
+| `Modes` / `--modes` | No | `rawdog,securable` | One or more generation modes to execute. Accepts a list (e.g., `rawdog,securable` or repeated flags). Implementations MUST validate all requested modes and fail early if any mode is unsupported. Error text MUST include the list of available modes. Supported modes are `rawdog` and `securable`. |
 | `Clean` / `--clean` | No | `false` | Remove the cached plugin clone (`[plugin_temp_dir_name]`) and all `[finished_flag_file]` flags from the output directory, then exit. No generation is performed. `PrdFile` is NOT required when `Clean` is active. |
 
 ### Parameter Interactions
@@ -117,14 +110,14 @@ Minimum required built-in modes:
 |---|---|
 | `rawdog` | Plain generation with no security plugin constraints. |
 | `securable` | Generation with `[securable_plugin]` assets installed and securability constraints applied. |
-| `fiassed` | Securable generation plus a pre-generation PRD enhancement operation run after plugin installation and before prompt construction. |
 
-`fiassed` mode requirements:
+`securable` mode execution requirements:
 
-- For `securable-claude-plugin`, the canonical play is `plays/requirements-analysis/prd-fiasse-asvs-enhancement.md`.
-- If the selected plugin/CLI does not use Claude-style plays, implementations MUST run the equivalent enhancement operation using that plugin's native assets/mechanism.
-- The enhancement operation MUST be executed appropriately for the active CLI (`claude`, `copilot`, `opencode`, etc.), not by assuming a single tool's command semantics.
-- If `fiassed` is requested but the implementation has no usable enhancement mechanism for the selected plugin/CLI combination, it MUST fail early with a clear error.
+- For `claude` and for `copilot` with `securable-claude-plugin`, use the `code-generation/securable-generation` play.
+- For `copilot` with `securable-copilot` (native plugin), explicitly invoke the `securability-engineer` agent.
+- For `opencode`, use `secure-generate`.
+- Implementations MUST execute securable generation through the active plugin/tool's native play/command/agent mechanism, not by assuming one CLI's invocation semantics for all tools.
+- If no usable securable mechanism exists for the selected plugin/CLI combination, fail early with a clear error.
 
 Future mode additions MUST only require adding a new mode definition and should not require rewriting the core execution loop structure.
 
@@ -190,7 +183,7 @@ For each language key (`aspnet`, `jsp`, `node`) and each selected mode from `Mod
   # being loaded into this isolated test run.  Do not add instructions here.
   ```
 
-##### 3d. Plugin Installation (securable and fiassed)
+##### 3d. Plugin Installation (securable)
 
 - Copy plugin assets from the cached clone into the target directory.
 - Assets vary by `[securable_plugin]`:
@@ -200,13 +193,16 @@ For each language key (`aspnet`, `jsp`, `node`) and each selected mode from `Mod
   | `securable-claude-plugin` | `.claude/`, `skills/`, `data/`, `CLAUDE.md` |
   | `securable-copilot` | `.github/` (includes `prompts/`, `agents/`, `copilot-instructions.md`) |
 
-##### 3e. PRD Enhancement (fiassed only)
+##### 3e. Securable Workflow Dispatch
 
-- After plugin installation and before prompt construction, run a PRD enhancement operation and produce an enhanced PRD.
-- For `securable-claude-plugin`, use the play at `plays/requirements-analysis/prd-fiasse-asvs-enhancement.md`.
-- For other plugin/CLI combinations, execute an equivalent enhancement workflow using the mechanism appropriate to that CLI/plugin.
-- Use the enhanced PRD as `<prd_content>` in the generation prompt.
-- In `DryRun`, print what enhancement step would run without executing it.
+When processing `securable` mode, dispatch generation using the plugin/tool native mechanism:
+
+- `claude` + `securable-claude-plugin`: run `code-generation/securable-generation`.
+- `copilot` + `securable-claude-plugin`: run `code-generation/securable-generation`.
+- `copilot` + `securable-copilot`: explicitly use the `securability-engineer` agent.
+- `opencode`: run `secure-generate`.
+
+In `DryRun`, print the exact dispatch action that would run.
 
 ##### 3f. Prompt Construction
 
@@ -260,8 +256,8 @@ For CLIs that automatically load project-local plugin files, the securable promp
 SHOULD rely on the installed plugin assets rather than duplicating plugin content
 inline in the prompt.
 
-Implementations MAY still embed workflow content for separate one-off operations
-that are not automatically dispatched by the CLI, such as PRD enhancement plays.
+Implementations MAY still embed workflow content for one-off operations that are
+not automatically dispatched by the CLI.
 
 ##### 3h. Write Permissions Configuration
 
@@ -290,7 +286,7 @@ Invoke `[llm_cli_tool]` non-interactively in the target directory. The tool writ
 #### Step 4 — Summary
 
 Print a structured summary showing:
-1. The generated folder structure with annotations for each variant.
+1. The generated folder structure with annotations for each mode.
 2. Where to find log files.
 3. In `DryRun` mode: a clear notice that no LLM calls were made.
 
