@@ -153,9 +153,10 @@ When `Clean` is specified:
 #### Step 2 — Clone the Plugin
 
 1. Target directory: `OutputDir/[plugin_temp_dir_name]`.
-2. If the directory already exists, skip cloning (print a notice).
-3. Otherwise, run `git clone [plugin_repo_url] [plugin_temp_dir_name]`.
-4. In `DryRun` mode: create a minimal stub directory structure so later steps can reference plugin files.
+2. If the directory already exists, run a git update in that directory (for example, `git pull --ff-only`) and print a notice.
+3. If the existing directory is not a valid git working tree, fail with a clear error and instruct the user to run `Clean`.
+4. Otherwise, run `git clone [plugin_repo_url] [plugin_temp_dir_name]`.
+5. In `DryRun` mode: create a minimal stub directory structure so later steps can reference plugin files.
 
 #### Step 3 — Generate per Language × Mode
 
@@ -308,6 +309,7 @@ When `DryRun` is active, the script MUST:
 - Use strict mode (`Set-StrictMode -Version Latest` / `set -euo pipefail`).
 - Stop on errors by default (`$ErrorActionPreference = "Stop"` / `set -e`).
 - LLM CLI non-zero exit codes produce a **warning** and continue to the next variation (do not abort the entire run).
+- `git update` (for existing cache directories) failure is **fatal** — terminate immediately.
 - `git clone` failure is **fatal** — terminate immediately.
 - Missing required tools are **fatal** — terminate with a clear message.
 

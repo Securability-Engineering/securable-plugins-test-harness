@@ -442,7 +442,16 @@ New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $PluginTemp = Join-Path $OutputDir "_securable_opencode_temp"
 
 if (Test-Path $PluginTemp) {
-    Write-Step "Module already cloned at $PluginTemp - skipping clone" "Yellow"
+    Write-Step "Module already cloned at $PluginTemp - updating" "Yellow"
+    if ($DryRun) {
+        Write-Host "  [DRY-RUN] git -C $PluginTemp pull --ff-only" -ForegroundColor Yellow
+    } else {
+        if (-not (Test-Path (Join-Path $PluginTemp ".git"))) {
+            throw "Existing module cache is not a git repository: $PluginTemp. Run -Clean and retry."
+        }
+        git -C $PluginTemp pull --ff-only
+        if ($LASTEXITCODE -ne 0) { throw "git update failed for module cache at $PluginTemp" }
+    }
 } else {
     Write-Step "Cloning securable-opencode-module ..."
     if ($DryRun) {

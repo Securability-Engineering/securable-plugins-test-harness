@@ -323,7 +323,20 @@ mkdir -p "$OUTPUT_DIR"
 PLUGIN_TEMP="$OUTPUT_DIR/_securable_copilot_temp"
 
 if [[ -d "$PLUGIN_TEMP" ]]; then
-    write_step "Plugin already cloned at $PLUGIN_TEMP — skipping clone"
+    write_step "Plugin already cloned at $PLUGIN_TEMP — updating"
+    if [[ "$DRY_RUN" == true ]]; then
+        _yellow "  [DRY-RUN] git -C $PLUGIN_TEMP pull --ff-only"
+    else
+        if [[ ! -d "$PLUGIN_TEMP/.git" ]]; then
+            _red "Error: Existing plugin cache is not a git repository: $PLUGIN_TEMP"
+            _red "Run with --clean to remove stale cache, then rerun."
+            exit 1
+        fi
+        git -C "$PLUGIN_TEMP" pull --ff-only || {
+            _red "Error: git update failed for plugin cache at $PLUGIN_TEMP"
+            exit 1
+        }
+    fi
 else
     write_step "Cloning securable-copilot ..."
     if [[ "$DRY_RUN" == true ]]; then
