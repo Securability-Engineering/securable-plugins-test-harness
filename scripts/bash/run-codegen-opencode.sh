@@ -2,7 +2,7 @@
 # =============================================================================
 # run-codegen-opencode.sh
 #
-# Automates OpenCode CLI to generate a project from a PRD in 3 languages,
+# Automates OpenCode CLI to generate a project from a PRD in 4 languages,
 # each with a selectable generation mode such as rawdog or securable.
 #
 # Uses the securable-opencode-module for the securable runs. The module is
@@ -27,7 +27,7 @@
 #       securable/
 #
 # Usage:
-#   ./run-codegen-opencode.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume] [--modes <list>]
+#   ./run-codegen-opencode.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume] [--modes <list>] [--languages <list>]
 #   ./run-codegen-opencode.sh --clean [--output-dir <dir>]
 #
 # Options:
@@ -37,6 +37,7 @@
 #   --dry-run      Print what would run without calling OpenCode
 #   --resume       Skip completed variations and preserve existing directories
 #   --modes        Comma-separated or repeated mode list (default: rawdog,securable)
+#   --languages    Comma-separated or repeated language list (default: aspnet,jsp,node,ts)
 #   --clean        Remove cached module clone and finished flags, then exit
 #   -h, --help     Show this help text
 #
@@ -75,15 +76,17 @@ RESUME=false
 CLEAN=false
 FINISHED_FLAG=".codegen-finished"
 MODES_INPUTS=()
+LANG_INPUTS=()
 
 # -----------------------------------------------------------------------------
 # Language definitions
 # -----------------------------------------------------------------------------
-LANG_KEYS=("aspnet" "jsp" "node")
+LANG_KEYS=("aspnet" "jsp" "node" "ts")
 declare -A LANG_LABELS=(
     ["aspnet"]="ASP.NET Core (C#) Web API / MVC application"
     ["jsp"]="Java web application using JSP (Java Server Pages) and servlets"
     ["node"]="Node.js web application using Express.js"
+    ["ts"]="TS + React + Vite + Tailwind + Recharts web application to be run on Vercel"
 )
 
 declare -A MODE_IS_SECURABLE=(
@@ -115,6 +118,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)      DRY_RUN=true;     shift   ;;
         --resume)       RESUME=true;      shift   ;;
         --modes)        MODES_INPUTS+=("$2"); shift 2 ;;
+        --languages)    LANG_INPUTS+=("$2"); shift 2 ;;
         --clean)        CLEAN=true;       shift   ;;
         -h|--help)      usage ;;
         *) _red "Unknown option: $1"; usage ;;
@@ -128,6 +132,10 @@ OUTPUT_DIR="$(realpath -m "$OUTPUT_DIR")"
 
 if [[ ${#MODES_INPUTS[@]} -eq 0 ]]; then
     MODES_INPUTS=("rawdog" "securable")
+fi
+
+if [[ ${#LANG_INPUTS[@]} -eq 0 ]]; then
+    LANG_INPUTS=("aspnet" "jsp" "node" "ts")
 fi
 
 MODES=()
@@ -151,6 +159,30 @@ done
 
 if [[ ${#MODES[@]} -eq 0 ]]; then
     _red "Error: At least one mode must be provided via --modes. Available modes: rawdog, securable"
+    exit 1
+fi
+
+SELECTED_LANGS=()
+declare -A _seen_langs=()
+for lang_arg in "${LANG_INPUTS[@]}"; do
+    IFS=',' read -r -a _parts <<< "$lang_arg"
+    for candidate in "${_parts[@]}"; do
+        normalized="${candidate,,}"
+        normalized="${normalized//[[:space:]]/}"
+        [[ -z "$normalized" ]] && continue
+        if [[ -z "${LANG_LABELS[$normalized]+x}" ]]; then
+            _red "Error: Unsupported language '$normalized'. Available languages: aspnet, jsp, node, ts"
+            exit 1
+        fi
+        if [[ -z "${_seen_langs[$normalized]+x}" ]]; then
+            SELECTED_LANGS+=("$normalized")
+            _seen_langs[$normalized]=1
+        fi
+    done
+done
+
+if [[ ${#SELECTED_LANGS[@]} -eq 0 ]]; then
+    _red "Error: At least one language must be provided via --languages. Available languages: aspnet, jsp, node, ts"
     exit 1
 fi
 
@@ -377,6 +409,7 @@ _gray "  Output dir : $OUTPUT_DIR"
 _gray "  Dry run    : $DRY_RUN"
 _gray "  Resume     : $RESUME"
 _gray "  Modes      : ${MODES[*]}"
+_gray "  Languages  : ${SELECTED_LANGS[*]}"
 
 write_step "Checking prerequisites ..."
 if [[ "$DRY_RUN" == false ]]; then
@@ -438,7 +471,7 @@ SECURE_INSTRUCTIONS="$(get_secure_instructions "$PLUGIN_TEMP")"
 PROMPT_TMP="$(mktemp /tmp/opencode_prompt_XXXXXX.txt)"
 trap 'rm -f "$PROMPT_TMP"' EXIT
 
-for lang_key in "${LANG_KEYS[@]}"; do
+for lang_key in "${SELECTED_LANGS[@]}"; do
     lang_label="${LANG_LABELS[$lang_key]}"
 
     for mode in "${MODES[@]}"; do
@@ -574,7 +607,7 @@ done
 write_step "All done!"
 echo
 _cyan "Generated folder structure:"
-for lang_key in "${LANG_KEYS[@]}"; do
+for lang_key in "${SELECTED_LANGS[@]}"; do
     _cyan "  $OUTPUT_DIR/$lang_key/"
     for mode in "${MODES[@]}"; do
         _gray "    $mode/  <- ${MODE_SUMMARY[$mode]}"

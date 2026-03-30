@@ -57,7 +57,10 @@ All implementations MUST produce the following directory layout under `[default_
 ├── jsp/
 │   ├── rawdog/
 │   ├── securable/
-└── node/
+├── node/
+    ├── rawdog/
+    └── securable/
+└── ts/
     ├── rawdog/
     └── securable/
 ```
@@ -76,6 +79,7 @@ All implementations MUST accept the following parameters. The flag syntax is she
 | `DryRun` / `--dry-run` | No | `false` | Print what would run without invoking `[llm_cli_tool]`. Creates stub plugin structures so the full flow can be traced. |
 | `Resume` / `--resume` | No | `false` | Preserve existing output directories and skip variations that have a `[finished_flag_file]`. Useful when token limits or rate limits interrupt a run. |
 | `Modes` / `--modes` | No | `rawdog,securable` | One or more generation modes to execute. Accepts a list (e.g., `rawdog,securable` or repeated flags). Implementations MUST validate all requested modes and fail early if any mode is unsupported. Error text MUST include the list of available modes. Supported modes are `rawdog` and `securable`. |
+| `Languages` / `--languages` | No | `aspnet,jsp,node,ts` | One or more language keys to execute. Accepts a list (e.g., `aspnet,ts` or repeated flags). Implementations MUST validate all requested language keys and fail early if any key is unsupported. Error text MUST include the list of available languages. Supported keys are `aspnet`, `jsp`, `node`, and `ts`. |
 | `Clean` / `--clean` | No | `false` | Remove the cached plugin clone (`[plugin_temp_dir_name]`) and all `[finished_flag_file]` flags from the output directory, then exit. No generation is performed. `PrdFile` is NOT required when `Clean` is active. |
 
 ### Parameter Interactions
@@ -85,6 +89,8 @@ All implementations MUST accept the following parameters. The flag syntax is she
   - `Resume` only skips variations where `[finished_flag_file]` exists; all other variations proceed normally (preserving existing content rather than wiping).
 - `Modes` accepts one or more values and defaults to the built-in baseline modes (`rawdog`, `securable`).
 - If any value in `Modes` is not in the implementation's supported mode list, the script MUST fail before generation starts and print both the invalid values and all available mode options.
+- `Languages` accepts one or more values and defaults to all built-in languages (`aspnet`, `jsp`, `node`, `ts`).
+- If any value in `Languages` is not in the implementation's supported language key list, the script MUST fail before generation starts and print both the invalid values and all available language key options.
 - Without `Resume`, existing target directories are **wiped and recreated** before generation.
 - Without `Resume`, the `[finished_flag_file]` is **ignored** — completed variations are re-run.
 
@@ -99,6 +105,7 @@ All implementations MUST use the same set of target languages and labels:
 | `aspnet` | ASP.NET Core (C#) Web API / MVC application |
 | `jsp` | Java web application using JSP (Java Server Pages) and servlets |
 | `node` | Node.js web application using Express.js |
+| `ts` | TS + React + Vite + Tailwind + Recharts web application to be run on Vercel |
 
 ### 5.1 Mode Definitions
 
@@ -160,7 +167,7 @@ When `Clean` is specified:
 
 #### Step 3 — Generate per Language × Mode
 
-For each language key (`aspnet`, `jsp`, `node`) and each selected mode from `Modes`:
+For each language key (`aspnet`, `jsp`, `node`, `ts`) and each selected mode from `Modes`:
 
 ##### 3a. Resume / Skip Check
 

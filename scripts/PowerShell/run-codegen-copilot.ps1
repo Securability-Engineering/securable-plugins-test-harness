@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Automates GitHub Copilot CLI to generate a project from a PRD in 3 languages,
+    Automates GitHub Copilot CLI to generate a project from a PRD in 4 languages,
     each with a "rawdog" (plain) and "securable" (FIASSE plugin) variant.
 
 .DESCRIPTION
@@ -36,6 +36,11 @@
     Resume a previous run without wiping existing target directories.
     Useful when token windows or rate limits interrupt generation.
 
+.PARAMETER Languages
+    One or more language keys to run.
+    Defaults to all: aspnet,jsp,node,ts
+    Supported language keys: aspnet, jsp, node, ts
+
 .PARAMETER Clean
     Remove the cached plugin clone and .codegen-finished flags from
     the output directory, then exit.  No generation is performed.
@@ -60,6 +65,9 @@ param(
 
     [switch]$Resume,
 
+    [ValidateCount(1, 32)]
+    [string[]]$Languages = @("aspnet", "jsp", "node", "ts"),
+
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
 )
@@ -67,10 +75,32 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$Languages = [ordered]@{
+$LanguageLabels = [ordered]@{
     "aspnet" = "ASP.NET Core (C#) Web API / MVC application"
     "jsp"    = "Java web application using JSP (Java Server Pages) and servlets"
     "node"   = "Node.js web application using Express.js"
+    "ts"     = "TS + React + Vite + Tailwind + Recharts web application to be run on Vercel"
+}
+
+$SupportedLanguages = @($LanguageLabels.Keys)
+$NormalizedLanguages = [System.Collections.Generic.List[string]]::new()
+foreach ($langArg in $Languages) {
+    foreach ($candidate in ($langArg -split ",")) {
+        $normalized = $candidate.Trim().ToLowerInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            $NormalizedLanguages.Add($normalized)
+        }
+    }
+}
+
+$SelectedLanguages = @($NormalizedLanguages | Select-Object -Unique)
+if ($SelectedLanguages.Count -eq 0) {
+    throw "At least one language must be provided via -Languages. Available languages: $($SupportedLanguages -join ', ')"
+}
+
+$InvalidLanguages = @($SelectedLanguages | Where-Object { $_ -notin $SupportedLanguages })
+if ($InvalidLanguages.Count -gt 0) {
+    throw "Unsupported language(s): $($InvalidLanguages -join ', '). Available languages: $($SupportedLanguages -join ', ')"
 }
 
 $FinishedFlagFileName = ".codegen-finished"
@@ -217,6 +247,7 @@ Write-Host "  PRD file   : $PrdFile"
 Write-Host "  Output dir : $OutputDir"
 Write-Host "  Dry run    : $DryRun"
 Write-Host "  Resume     : $Resume"
+Write-Host "  Languages  : $($SelectedLanguages -join ', ')"
 
 Write-Step "Checking prerequisites ..."
 if (-not $DryRun) {
@@ -255,14 +286,14 @@ if (Test-Path $PluginTemp) {
 }
 
 $AllTargetDirs = @()
-foreach ($lang in $Languages.Keys) {
+foreach ($lang in $SelectedLanguages) {
     foreach ($m in @("rawdog", "securable")) {
         $AllTargetDirs += (Join-Path $OutputDir "$lang\$m")
     }
 }
 
-foreach ($langKey in $Languages.Keys) {
-    $langLabel = $Languages[$langKey]
+foreach ($langKey in $SelectedLanguages) {
+    $langLabel = $LanguageLabels[$langKey]
 
     foreach ($mode in @("rawdog", "securable")) {
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
@@ -364,7 +395,7 @@ foreach ($langKey in $Languages.Keys) {
 Write-Step "All done!" "Magenta"
 Write-Host ""
 Write-Host "Generated folder structure:" -ForegroundColor White
-foreach ($langKey in $Languages.Keys) {
+foreach ($langKey in $SelectedLanguages) {
     Write-Host "  $OutputDir\" -NoNewline -ForegroundColor Gray
     Write-Host "$langKey\" -ForegroundColor Cyan
     Write-Host "    rawdog\     - plain Copilot generation" -ForegroundColor Gray

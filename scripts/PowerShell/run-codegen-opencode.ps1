@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Automates OpenCode to generate a project from a PRD in 3 languages,
+    Automates OpenCode to generate a project from a PRD in 4 languages,
     each with a "rawdog" (plain) and "securable" (FIASSE module) variant.
 
 .DESCRIPTION
@@ -49,6 +49,11 @@
         Accepts comma-separated values and repeated arguments.
         Defaults to rawdog and securable.
 
+.PARAMETER Languages
+    One or more language keys to run.
+    Defaults to all: aspnet,jsp,node,ts
+    Supported language keys: aspnet, jsp, node, ts
+
 .PARAMETER Clean
     Remove the cached plugin clone and .codegen-finished flags from
     the output directory, then exit.  No generation is performed.
@@ -79,6 +84,10 @@ param(
     [ValidateCount(1, 32)]
     [string[]]$Modes = @("rawdog", "securable"),
 
+    [Parameter(ParameterSetName = 'Run')]
+    [ValidateCount(1, 32)]
+    [string[]]$Languages = @("aspnet", "jsp", "node", "ts"),
+
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
 )
@@ -89,10 +98,11 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 # Language definitions
 # ---------------------------------------------------------------------------
-$Languages = [ordered]@{
+$LanguageLabels = [ordered]@{
     "aspnet" = "ASP.NET Core (C#) Web API / MVC application"
     "jsp"    = "Java web application using JSP (Java Server Pages) and servlets"
     "node"   = "Node.js web application using Express.js"
+    "ts"     = "TS + React + Vite + Tailwind + Recharts web application to be run on Vercel"
 }
 
 $FinishedFlagFileName = ".codegen-finished"
@@ -409,6 +419,27 @@ if ($InvalidModes.Count -gt 0) {
     throw "Unsupported mode(s): $($InvalidModes -join ', '). Available modes: $($SupportedModes -join ', ')"
 }
 
+$SupportedLanguages = @($LanguageLabels.Keys)
+$NormalizedLanguages = [System.Collections.Generic.List[string]]::new()
+foreach ($langArg in $Languages) {
+    foreach ($candidate in ($langArg -split ",")) {
+        $normalized = $candidate.Trim().ToLowerInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            $NormalizedLanguages.Add($normalized)
+        }
+    }
+}
+
+$SelectedLanguages = @($NormalizedLanguages | Select-Object -Unique)
+if ($SelectedLanguages.Count -eq 0) {
+    throw "At least one language must be provided via -Languages. Available languages: $($SupportedLanguages -join ', ')"
+}
+
+$InvalidLanguages = @($SelectedLanguages | Where-Object { $_ -notin $SupportedLanguages })
+if ($InvalidLanguages.Count -gt 0) {
+    throw "Unsupported language(s): $($InvalidLanguages -join ', '). Available languages: $($SupportedLanguages -join ', ')"
+}
+
 $PrdFile = Resolve-Path $PrdFile | Select-Object -ExpandProperty Path
 
 Write-Step "Starting OpenCode codegen run" "Magenta"
@@ -417,6 +448,7 @@ Write-Host "  Output dir : $OutputDir"
 Write-Host "  Dry run    : $DryRun"
 Write-Host "  Resume     : $Resume"
 Write-Host "  Modes      : $($Modes -join ', ')"
+Write-Host "  Languages  : $($SelectedLanguages -join ', ')"
 
 # ---------------------------------------------------------------------------
 # Prerequisite check
@@ -477,8 +509,8 @@ $SecurableInstructions = Get-SecurableInstructions $PluginTemp
 # ---------------------------------------------------------------------------
 # Step 2: Loop over languages x modes
 # ---------------------------------------------------------------------------
-foreach ($langKey in $Languages.Keys) {
-    $langLabel = $Languages[$langKey]
+foreach ($langKey in $SelectedLanguages) {
+    $langLabel = $LanguageLabels[$langKey]
 
     foreach ($mode in $Modes) {
         $modeConfig = $ModeDefinitions[$mode]
@@ -606,7 +638,7 @@ foreach ($langKey in $Languages.Keys) {
 Write-Step "All done!" "Magenta"
 Write-Host ""
 Write-Host "Generated folder structure:" -ForegroundColor White
-foreach ($langKey in $Languages.Keys) {
+foreach ($langKey in $SelectedLanguages) {
     Write-Host "  $OutputDir\" -NoNewline -ForegroundColor Gray
     Write-Host "$langKey\" -ForegroundColor Cyan
     foreach ($mode in $Modes) {
