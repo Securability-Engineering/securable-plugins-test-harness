@@ -25,4 +25,12 @@ Securable runs must use the native plugin/tool dispatch mechanism:
 - bash scripts: [scripts/bash/README.md](scripts/bash/README.md)
 - Canonical requirements spec: [scripts/run-codegen.prd.md](scripts/run-codegen.prd.md)
 
+## Plugin Cache Update Behavior
+
+All run-codegen scripts maintain a plugin/module cache directory under the selected output root.
+
+- If the cache directory does not exist, scripts clone from the configured plugin repository.
+- If the cache directory already exists, scripts run a git update (`git pull --ff-only`) before generation.
+- If an existing cache directory is not a git repository, scripts fail with a clear message and require a clean run.
+
 For generated output snapshots, see [fiasse benchmark output](https://github.com/Xcaciv/fiasse_benchmark_output).

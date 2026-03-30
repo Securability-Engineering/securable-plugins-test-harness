@@ -191,6 +191,14 @@ Always run with `--dry-run` first to verify paths and review the prompts before 
   --plugin-repo https://github.com/yourorg/securable-claude-plugin.git
 ```
 
+### Plugin cache update behavior
+
+Each script keeps a cached plugin/module clone inside the output directory.
+
+- If the cache does not exist, the script runs git clone.
+- If the cache exists, the script runs git pull --ff-only before generation.
+- If the cache path exists but is not a git repository, the run fails and you should run --clean first.
+
 ---
 
 ## How Plugin Activation Works
@@ -273,6 +281,9 @@ See [opencode.ai/docs](https://opencode.ai/docs/) for installation instructions.
 
 **`git clone` fails**
 Ensure `git` is on your `PATH` and you have network access to GitHub. If behind a proxy: `git config --global http.proxy http://proxy:port`.
+
+**Plugin cache update fails (`git pull --ff-only`)**
+The cached plugin/module clone could be in a diverged or invalid state. Run with `--clean` to remove cache directories and finished flags, then rerun.
 
 **Permission denied when running the script**
 Run `chmod +x <script-name>.sh` to make it executable.

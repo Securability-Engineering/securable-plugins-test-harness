@@ -160,6 +160,14 @@ Always run with `-DryRun` first to verify paths and review the prompts before sp
 .\run-codegen-claude.ps1 -PrdFile .\my-prd.md -PluginRepo https://github.com/yourorg/securable-claude-plugin.git
 ```
 
+### Plugin cache update behavior
+
+Each script keeps a cached plugin/module clone inside the output directory.
+
+- If the cache does not exist, the script runs `git clone`.
+- If the cache exists, the script runs `git pull --ff-only` before generation.
+- If the cache path exists but is not a git repository, the run fails and you should run `-Clean` first.
+
 ---
 
 ## How Plugin Activation Works
@@ -233,6 +241,9 @@ Ensure Claude Code is installed globally: `npm install -g @anthropic-ai/claude-c
 
 **`git clone` fails**  
 Ensure `git` is on your `PATH` and you have network access to GitHub. If you're behind a proxy, configure it with `git config --global http.proxy`.
+
+**Plugin cache update fails (`git pull --ff-only`)**  
+The cached plugin/module clone could be in a diverged or invalid state. Run with `-Clean` to remove cache directories and finished flags, then rerun.
 
 **Script is blocked by execution policy**  
 Run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` in an elevated PowerShell window.
