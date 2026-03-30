@@ -40,8 +40,6 @@
         Supported modes:
             - rawdog   : plain generation
             - securable: generation with securable-claude-plugin constraints
-            - fiassed  : securable generation plus PRD enhancement via the
-                                     prd-fiasse-asvs-enhancement play before prompting
 
 .PARAMETER Clean
     Remove the cached plugin clone and .codegen-finished flags from
@@ -51,7 +49,6 @@
 .EXAMPLE
     .\run-codegen-claude.ps1 -PrdFile .\my-prd.md
     .\run-codegen-claude.ps1 -PrdFile .\my-prd.md -OutputDir C:\Projects\codegen -DryRun
-    .\run-codegen-claude.ps1 -PrdFile .\my-prd.md -Modes fiassed
     .\run-codegen-claude.ps1 -PrdFile .\my-prd.md -Resume
     .\run-codegen-claude.ps1 -OutputDir C:\Projects\codegen -Clean
 #>
@@ -71,7 +68,7 @@ param(
     [switch]$Resume,
 
     [ValidateCount(1, 32)]
-    [string[]]$Modes = @("rawdog", "securable", "fiassed"),
+    [string[]]$Modes = @("rawdog", "securable"),
 
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
@@ -93,18 +90,11 @@ $Languages = [ordered]@{
 $ModeDefinitions = [ordered]@{
     "rawdog" = @{
         IsSecurable  = $false
-        IsFiassed    = $false
         SummaryLabel = "plain generation"
     }
     "securable" = @{
         IsSecurable  = $true
-        IsFiassed    = $false
         SummaryLabel = "FIASSE/SSEM secured generation"
-    }
-    "fiassed" = @{
-        IsSecurable  = $true
-        IsFiassed    = $true
-        SummaryLabel = "FIASSE/SSEM secured generation with PRD play enhancement"
     }
 }
 
@@ -235,71 +225,6 @@ function Install-SecurablePlugin {
 
     if (Test-Path $claudeMd) {
         Copy-Item -Force $claudeMd (Join-Path $TargetDir "CLAUDE.md")
-    }
-}
-
-function Get-FiassedPrdContent {
-    param(
-        [string]$WorkingDir,
-        [string]$PluginSource,
-        [string]$OriginalPrdContent,
-        [string]$Label
-    )
-
-    if ($DryRun) {
-        Write-Host "  [DRY-RUN] Would enhance PRD via fiassed play for: $Label" -ForegroundColor Yellow
-        return $OriginalPrdContent
-    }
-
-    $playCandidates = @(
-        (Join-Path $PluginSource "plays\requirements-analysis\prd-fiasse-asvs-enhancement.md"),
-        (Join-Path $PluginSource "plays\requirements-analysis\prd-fiasse-asvs-enhansement.md")
-    )
-    $playPath = $playCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $playPath) {
-        throw "fiassed mode requires play file 'prd-fiasse-asvs-enhancement.md'. Expected under plays/requirements-analysis in plugin repo."
-    }
-
-    $playContent = Get-Content $playPath -Raw
-    $enhancePrompt = @(
-        "Run the following play exactly to enhance the provided PRD.",
-        "",
-        "Output requirements:",
-        "- Return ONLY the enhanced PRD markdown",
-        "- Do not wrap in code fences",
-        "- Do not add explanations before or after",
-        "",
-        "=== PLAY: prd-fiasse-asvs-enhancement ===",
-        $playContent,
-        "=== END PLAY ===",
-        "",
-        "=== INPUT PRD ===",
-        $OriginalPrdContent,
-        "=== END INPUT PRD ==="
-    ) -join "`n"
-
-    $enhanceLogFile = Join-Path $WorkingDir "claude-prd-enhancement.log"
-    $enhancedPrdFile = Join-Path $WorkingDir "enhanced-prd.md"
-
-    Write-Step "Enhancing PRD via fiassed play for: $Label" "Green"
-    Push-Location $WorkingDir
-    try {
-        $enhancedOutput = $enhancePrompt | claude --print --permission-mode bypassPermissions 2>&1 | Tee-Object -FilePath $enhanceLogFile
-        if ($LASTEXITCODE -ne 0) {
-            throw "Claude PRD enhancement failed with exit code $LASTEXITCODE for $Label - check $enhanceLogFile"
-        }
-
-        $enhancedContent = (($enhancedOutput | Out-String).Trim())
-        if ([string]::IsNullOrWhiteSpace($enhancedContent)) {
-            throw "Claude PRD enhancement produced empty output for $Label - check $enhanceLogFile"
-        }
-
-        Set-Content -Path $enhancedPrdFile -Value $enhancedContent -Encoding UTF8
-        Write-Host "  Enhanced PRD written: $enhancedPrdFile" -ForegroundColor DarkGray
-        return $enhancedContent
-    }
-    finally {
-        Pop-Location
     }
 }
 
@@ -465,14 +390,17 @@ foreach ($langKey in $Languages.Keys) {
             Install-SecurablePlugin -PluginSource $PluginTemp -TargetDir $targetDir
             $pluginDirForMode = $PluginTemp
 
-            if ($modeConfig.IsFiassed) {
-                $effectivePrdContent = Get-FiassedPrdContent -WorkingDir $targetDir -PluginSource $PluginTemp -OriginalPrdContent $PrdContent -Label "$langKey / $mode"
+            if ($DryRun) {
+                Write-Host "  [DRY-RUN] Would dispatch securable play: code-generation/securable-generation" -ForegroundColor Yellow
+            } else {
+                Write-Host "  Dispatching securable play: code-generation/securable-generation" -ForegroundColor DarkGray
             }
 
             $prompt = @(
                 "You are operating with the securable-claude-plugin active.",
                 "The plugin is provided via the CLI --plugin-dir argument for this run.",
                 "Use the active plugin constraints while generating the project.",
+                "Execute the plugin play code-generation/securable-generation and use it as the authoritative workflow for this generation.",
                 "",
                 "Generate a complete, working $langLabel project based on the following PRD,",
                 "applying the active plugin's FIASSE/SSEM constraints throughout the generated code.",

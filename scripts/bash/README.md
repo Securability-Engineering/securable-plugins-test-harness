@@ -12,10 +12,8 @@ Each script takes a single PRD file as input and runs AI-assisted code generatio
 | ---- | ----------- |
 | `rawdog` | Plain generation — no security plugin active |
 | `securable` | Generation with FIASSE/SSEM security constraints applied |
-| `fiassed` | Securable generation with a pre-generation PRD securability enhancement pass |
 
-Mode availability differs by script/plugin combination. Where `fiassed` is supported,
-output includes `<language>/fiassed/` alongside `rawdog` and `securable`.
+All scripts generate `<language>/rawdog/` and `<language>/securable/` output folders.
 
 All scripts produce output under a consistent language/mode structure:
 
@@ -33,6 +31,14 @@ All scripts produce output under a consistent language/mode structure:
 ```
 
 Every folder also contains a log file with the full CLI output for that run. A `.codegen-finished` sentinel file is created by the LLM upon completion of each variation.
+
+### Securable Dispatch Requirements
+
+Implementations use plugin-native dispatch for securable generation:
+
+- Claude and Copilot with `securable-claude-plugin`: run play `code-generation/securable-generation`
+- Copilot with `securable-copilot`: explicitly use agent `securability-engineer`
+- OpenCode with `securable-opencode-module`: run command `secure-generate`
 
 ---
 
@@ -78,13 +84,7 @@ Uses the `.github/` plugin layout (prompts, agents, `copilot-instructions.md`) t
 
 Drives OpenCode in non-interactive (`run`) mode. The module is installed into `.securable/` in each target directory, with an `opencode.json` configuring permissions. Module tools and workflows are consumed directly from `.securable/`. Context fence uses `AGENTS.md` in rawdog directories.
 
-For `fiassed` mode, the script runs the module-native workflow runner:
-
-```bash
-node ./.securable/scripts/run-workflow.js prd-securability-enhance <input-json>
-```
-
-The workflow's `result.enhancedPrd` is used as the PRD for generation.
+For `securable` mode, the script dispatches the module-native `secure-generate` command.
 
 **Default output directory:** `./opencode-codegen-output`
 

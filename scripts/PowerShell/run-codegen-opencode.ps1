@@ -2,8 +2,7 @@
 <#
 .SYNOPSIS
     Automates OpenCode to generate a project from a PRD in 3 languages,
-    each with a "rawdog" (plain), "securable" (FIASSE module), and
-    "fiassed" (securable plus PRD enhancement) variant.
+    each with a "rawdog" (plain) and "securable" (FIASSE module) variant.
 
 .DESCRIPTION
     Produces the following folder structure:
@@ -11,25 +10,17 @@
             aspnet/
                 rawdog/     <- Plain OpenCode generation
                 securable/  <- Generation with securable-opencode-module active
-                fiassed/    <- Securable + PRD securability enhancement workflow
             jsp/
                 rawdog/
                 securable/
-                fiassed/
             node/
                 rawdog/
                 securable/
-                fiassed/
 
     Plugin activation mechanism (securable mode):
         The script clones securable-opencode-module once, then copies the
         module into .securable/ in each securable target directory and writes
         an opencode.json with permissions.
-
-    Fiassed enhancement mechanism:
-        The script pipes JSON to the module tool directly via stdin:
-        node ./.securable/tools/prd_securability_enhance.js < <input-json-file>
-        and uses the top-level enhancedPrd field from the response as the effective PRD.
 
     OpenCode invocation:
         opencode run -f <prompt-file>
@@ -54,9 +45,9 @@
 
 .PARAMETER Modes
         One or more generation modes to run. Supported values:
-            rawdog, securable, fiassed
+            rawdog, securable
         Accepts comma-separated values and repeated arguments.
-        Defaults to all three modes.
+        Defaults to rawdog and securable.
 
 .PARAMETER Clean
     Remove the cached plugin clone and .codegen-finished flags from
@@ -86,7 +77,7 @@ param(
 
     [Parameter(ParameterSetName = 'Run')]
     [ValidateCount(1, 32)]
-    [string[]]$Modes = @("rawdog", "securable", "fiassed"),
+    [string[]]$Modes = @("rawdog", "securable"),
 
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
@@ -109,18 +100,11 @@ $FinishedFlagFileName = ".codegen-finished"
 $ModeDefinitions = [ordered]@{
     "rawdog" = @{
         IsSecurable  = $false
-        IsFiassed    = $false
         SummaryLabel = "plain OpenCode generation"
     }
     "securable" = @{
         IsSecurable  = $true
-        IsFiassed    = $false
         SummaryLabel = "FIASSE/SSEM secured generation"
-    }
-    "fiassed" = @{
-        IsSecurable  = $true
-        IsFiassed    = $true
-        SummaryLabel = "FIASSE/SSEM secured generation with PRD securability enhancement"
     }
 }
 
@@ -371,118 +355,6 @@ function Get-SecurableInstructions([string]$PluginSource) {
     ) -join "`n"
 }
 
-# ---------------------------------------------------------------------------
-# Helper: Resolve module assets required by fiassed enhancement mode.
-# ---------------------------------------------------------------------------
-function Resolve-FiassedWorkflowPath {
-    param(
-        [string]$PluginSource
-    )
-
-    $toolPath      = Join-Path $PluginSource "tools\prd_securability_enhance.js"
-    $mcpServerPath = Join-Path $PluginSource "tools\mcp_server.js"
-
-    if (-not (Test-Path $toolPath -PathType Leaf)) {
-        return $null
-    }
-    if (-not (Test-Path $mcpServerPath -PathType Leaf)) {
-        return $null
-    }
-
-    return @{
-        ToolPath      = $toolPath
-        McpServerPath = $mcpServerPath
-    }
-}
-
-# ---------------------------------------------------------------------------
-# Helper: Run fiassed PRD enhancement with OpenCode and return enhanced PRD.
-# ---------------------------------------------------------------------------
-function Get-FiassedPrdContent {
-    param(
-        [string]$WorkingDir,
-        [string]$PluginSource,
-        [string]$OriginalPrdContent,
-        [string]$Label
-    )
-
-    $toolAssets = Resolve-FiassedWorkflowPath -PluginSource $PluginSource
-    if (-not $toolAssets) {
-        throw "fiassed mode requires module assets 'tools/prd_securability_enhance.js' and 'tools/mcp_server.js'."
-    }
-
-    if ($DryRun) {
-        Write-Host "  [DRY-RUN] Would enhance PRD via prd_securability_enhance tool for: $Label" -ForegroundColor Yellow
-        Write-Host "  [DRY-RUN] Tool: $($toolAssets.ToolPath)" -ForegroundColor Yellow
-        return $OriginalPrdContent
-    }
-
-    $enhanceLogFile = Join-Path $WorkingDir "opencode-prd-enhancement.log"
-    $enhancedPrdFile = Join-Path $WorkingDir "enhanced-prd.md"
-    $inputPrdFile = Join-Path $WorkingDir "fiassed-input-prd.md"
-
-    Write-Step "Enhancing PRD via prd_securability_enhance tool for: $Label" "Green"
-    Write-Host "  Tool       : $($toolAssets.ToolPath)"
-    Write-Host "  Log file   : $enhanceLogFile"
-
-    Set-Content -Path $inputPrdFile -Value $OriginalPrdContent -Encoding UTF8
-
-    # workspaceRoot must point to .securable/ so the tool resolves data/asvs/ correctly.
-    # prdPath is absolute so path.resolve() in the tool returns it unchanged.
-    $securablePath = (Join-Path $WorkingDir ".securable")
-    $toolInput = @{
-        "workspaceRoot"             = $securablePath
-        "prdPath"                   = $inputPrdFile
-        "asvsLevel"                 = 2
-        "maxRequirementsPerFeature" = 6
-    } | ConvertTo-Json
-
-    Push-Location $WorkingDir
-    try {
-        $workflowOutput = $toolInput | & node ".\.securable\tools\prd_securability_enhance.js" 2>&1 |
-            Tee-Object -FilePath $enhanceLogFile
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "node workflow runner failed with exit code $LASTEXITCODE for $Label - check $enhanceLogFile"
-        }
-
-        $workflowJsonText = (($workflowOutput | Out-String).Trim())
-        if ([string]::IsNullOrWhiteSpace($workflowJsonText)) {
-            throw "fiassed workflow returned empty output for $Label - check $enhanceLogFile"
-        }
-
-        try {
-            $workflowJson = $workflowJsonText | ConvertFrom-Json
-        }
-        catch {
-            throw "fiassed workflow output was not valid JSON for $Label - check $enhanceLogFile"
-        }
-
-        if (-not $workflowJson.ok) {
-            $errorMessage = "fiassed workflow reported failure"
-            if ($workflowJson.error -and $workflowJson.error.message) {
-                $errorMessage = $workflowJson.error.message
-            } elseif ($workflowJson.reason) {
-                $errorMessage = $workflowJson.reason
-            }
-            throw "$errorMessage for $Label - check $enhanceLogFile"
-        }
-
-        $enhancedContent = $workflowJson.enhancedPrd
-        if ([string]::IsNullOrWhiteSpace($enhancedContent)) {
-            throw "fiassed tool output did not include enhancedPrd for $Label - check $enhanceLogFile"
-        }
-
-        Set-Content -Path $enhancedPrdFile -Value $enhancedContent -Encoding UTF8
-        Write-Host "  Enhanced PRD written: $enhancedPrdFile" -ForegroundColor DarkGray
-
-        return $enhancedContent
-    }
-    finally {
-        Pop-Location
-    }
-}
-
 # ===========================================================================
 # MAIN
 # ===========================================================================
@@ -669,18 +541,17 @@ foreach ($langKey in $Languages.Keys) {
             # Install module files first so OpenCode auto-loads the MCP server
             Install-SecurableModule -PluginSource $PluginTemp -TargetDir $targetDir
 
-            if ($modeConfig.IsFiassed) {
-                $effectivePrdContent = Get-FiassedPrdContent `
-                    -WorkingDir $targetDir `
-                    -PluginSource $PluginTemp `
-                    -OriginalPrdContent $PrdContent `
-                    -Label "$langKey / $mode"
+            if ($DryRun) {
+                Write-Host "  [DRY-RUN] Would dispatch securable command: secure-generate" -ForegroundColor Yellow
+            } else {
+                Write-Host "  Dispatching securable command: secure-generate" -ForegroundColor DarkGray
             }
 
             $prompt = @(
                 "You are operating with the securable-opencode-module active (.securable/ directory",
                 "and opencode.json are present in this directory). The module tools and workflows are available,",
                 "including fiasse_lookup, securability_review, secure_generate, and prd_securability_enhance.",
+                "Execute secure-generate and use it as the authoritative generation workflow.",
                 "",
                 "The following securability engineering instructions are your primary",
                 "constraints - treat them as non-negotiable design requirements.",

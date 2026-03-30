@@ -58,8 +58,6 @@
         Supported modes:
             - rawdog   : plain generation
             - securable: generation with securable-claude-plugin constraints
-            - fiassed  : securable generation plus PRD enhancement via the
-                                     prd-fiasse-asvs-enhancement play before prompting
 
 .PARAMETER Clean
     Remove the cached plugin clone and .codegen-finished flags from
@@ -70,7 +68,6 @@
     .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md
     .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md -OutputDir D:\tests\copilot -DryRun
     .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md -Modes rawdog
-    .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md -Modes fiassed
     .\run-codegen-copilot-claude-plugin.ps1 -OutputDir D:\tests\copilot -Clean
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
@@ -88,7 +85,7 @@ param(
     [switch]$Resume,
 
     [ValidateCount(1, 32)]
-    [string[]]$Modes = @("rawdog", "securable", "fiassed"),
+    [string[]]$Modes = @("rawdog", "securable"),
 
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
@@ -109,18 +106,11 @@ $Languages = [ordered]@{
 $ModeDefinitions = [ordered]@{
     "rawdog" = @{
         IsSecurable  = $false
-        IsFiassed    = $false
         SummaryLabel = "plain Copilot generation"
     }
     "securable" = @{
         IsSecurable  = $true
-        IsFiassed    = $false
         SummaryLabel = "FIASSE/SSEM secured generation"
-    }
-    "fiassed" = @{
-        IsSecurable  = $true
-        IsFiassed    = $true
-        SummaryLabel = "FIASSE/SSEM secured generation with PRD play enhancement"
     }
 }
 
@@ -257,97 +247,6 @@ function Invoke-CopilotAgent {
     }
     finally {
         Pop-Location
-    }
-}
-
-# ---------------------------------------------------------------------------
-# Helper: Enhance PRD content using the FIASSE+ASVS play before generation.
-#
-#   Uses plugin play:
-#     plays/requirements-analysis/prd-fiasse-asvs-enhancement.md
-#
-#   Returns enhanced PRD markdown content. If in -DryRun mode, returns the
-#   original PRD unchanged.
-# ---------------------------------------------------------------------------
-function Get-FiassedPrdContent {
-    param(
-        [string]$WorkingDir,
-        [string]$PluginSource,
-        [string]$OriginalPrdContent,
-        [string]$Label
-    )
-
-    if ($DryRun) {
-        Write-Host "  [DRY-RUN] Would enhance PRD via fiassed play for: $Label" -ForegroundColor Yellow
-        return $OriginalPrdContent
-    }
-
-    $playCandidates = @(
-        (Join-Path $PluginSource "plays\requirements-analysis\prd-fiasse-asvs-enhancement.md"),
-        (Join-Path $PluginSource "plays\requirements-analysis\prd-fiasse-asvs-enhansement.md")
-    )
-
-    $playPath = $playCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $playPath) {
-        throw "fiassed mode requires play file 'prd-fiasse-asvs-enhancement.md'. Expected under plays/requirements-analysis in plugin repo."
-    }
-
-    $playContent = Get-Content $playPath -Raw
-    $enhancePrompt = @(
-        "Run the following play exactly to enhance the provided PRD.",
-        "",
-        "Output requirements:",
-        "- Return ONLY the enhanced PRD markdown",
-        "- Do not wrap in code fences",
-        "- Do not add explanations before or after",
-        "",
-        "=== PLAY: prd-fiasse-asvs-enhancement ===",
-        $playContent,
-        "=== END PLAY ===",
-        "",
-        "=== INPUT PRD ===",
-        $OriginalPrdContent,
-        "=== END INPUT PRD ==="
-    ) -join "`n"
-
-    $promptFile = Join-Path $env:TEMP "copilot_prd_enhance_$([System.IO.Path]::GetRandomFileName()).txt"
-    $enhancedPrdFile = Join-Path $WorkingDir "enhanced-prd.md"
-    $enhanceLogFile = Join-Path $WorkingDir "copilot-prd-enhancement.log"
-
-    Write-Step "Enhancing PRD via fiassed play for: $Label" "Green"
-    try {
-        Set-Content -Path $promptFile -Value $enhancePrompt -Encoding UTF8
-
-        $copilotArgs = @("--allow-all-tools", "--add-dir", $WorkingDir, "--allow-all-urls", "-p", $promptFile)
-        if ($Resume) {
-            $copilotArgs += "--resume"
-        }
-
-        $previousErrorActionPreference = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            $enhanceOutput = & cmd /c "copilot " @copilotArgs 2>&1 |
-                Tee-Object -FilePath $enhanceLogFile
-        }
-        finally {
-            $ErrorActionPreference = $previousErrorActionPreference
-        }
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Copilot PRD enhancement failed with exit code $LASTEXITCODE for $Label - check $enhanceLogFile"
-        }
-
-        $enhancedContent = (($enhanceOutput | Out-String).Trim())
-        if ([string]::IsNullOrWhiteSpace($enhancedContent)) {
-            throw "Copilot PRD enhancement produced empty output for $Label - check $enhanceLogFile"
-        }
-
-        Set-Content -Path $enhancedPrdFile -Value $enhancedContent -Encoding UTF8
-        Write-Host "  Enhanced PRD written: $enhancedPrdFile" -ForegroundColor DarkGray
-        return $enhancedContent
-    }
-    finally {
-        if (Test-Path $promptFile) { Remove-Item -Force $promptFile }
     }
 }
 
@@ -561,16 +460,17 @@ foreach ($langKey in $Languages.Keys) {
             # Install plugin files first so Copilot CLI auto-loads them
             Install-SecurableCopilotPlugin -PluginSource $PluginTemp -TargetDir $targetDir
 
-            if ($modeConfig.IsFiassed) {
-                # fiassed mode: run the PRD enhancement play after plugin install
-                # and before constructing the generation prompt.
-                $effectivePrdContent = Get-FiassedPrdContent -WorkingDir $targetDir -PluginSource $PluginTemp -OriginalPrdContent $PrdContent -Label "$langKey / $mode"
+            if ($DryRun) {
+                Write-Host "  [DRY-RUN] Would dispatch securable play: code-generation/securable-generation" -ForegroundColor Yellow
+            } else {
+                Write-Host "  Dispatching securable play: code-generation/securable-generation" -ForegroundColor DarkGray
             }
 
             $prompt = @(
                 "You are operating inside a project with the securable-claude-plugin installed.",
                 "Use the plugin files already present in this working directory as your source of",
                 "securability constraints while generating the project.",
+                "Execute the plugin play code-generation/securable-generation and use it as the authoritative workflow for this generation.",
                 "",
                 "Generate a complete, working $langLabel project based on the following PRD,",
                 "applying the active plugin's FIASSE/SSEM constraints throughout the generated code.",

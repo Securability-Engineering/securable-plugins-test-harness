@@ -10,9 +10,8 @@ Each script takes a single PRD file as input and runs AI-assisted code generatio
 | ---- | ----------- |
 | `rawdog` | Plain generation — no security plugin active |
 | `securable` | Generation with a FIASSE/SSEM security plugin applied |
-| `fiassed` | Securable generation with a pre-generation PRD securability enhancement pass (where supported) |
 
-Each script produces output under language/mode folders. Where `fiassed` is supported, each language also includes a `fiassed/` folder.
+Each script produces output under language/mode folders (`rawdog` and `securable`).
 
 Baseline structure:
 
@@ -30,6 +29,14 @@ Baseline structure:
 ```
 
 Every folder also contains a log file (`claude-output.log` or `copilot-output.log`) with the full CLI output for that run.
+
+### Securable Dispatch Requirements
+
+Implementations use plugin-native dispatch for securable generation:
+
+- Claude and Copilot with `securable-claude-plugin`: run play `code-generation/securable-generation`
+- Copilot with `securable-copilot`: explicitly use agent `securability-engineer`
+- OpenCode with `securable-opencode-module`: run command `secure-generate`
 
 ---
 

@@ -310,8 +310,15 @@ foreach ($langKey in $Languages.Keys) {
         } else {
             Install-SecurableCopilotPlugin -PluginSource $PluginTemp -TargetDir $targetDir
 
+            if ($DryRun) {
+                Write-Host "  [DRY-RUN] Would dispatch securable agent: securability-engineer" -ForegroundColor Yellow
+            } else {
+                Write-Host "  Dispatching securable agent: securability-engineer" -ForegroundColor DarkGray
+            }
+
             $prompt = @(
                 "You are operating inside a project with the securable-copilot plugin installed.",
+                "Use the securability-engineer agent explicitly for this securable run.",
                 "Use the plugin files already present in this working directory as your source of",
                 "securability constraints while generating the project.",
                 "",

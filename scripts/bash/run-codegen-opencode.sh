@@ -3,15 +3,11 @@
 # run-codegen-opencode.sh
 #
 # Automates OpenCode CLI to generate a project from a PRD in 3 languages,
-# each with a selectable generation mode such as rawdog, securable, or fiassed.
+# each with a selectable generation mode such as rawdog or securable.
 #
 # Uses the securable-opencode-module for the securable runs. The module is
 # copied into .securable/ in each target directory, and an opencode.json is
 # written at the project root with permission configuration.
-#
-# Fiassed enhancement is module-native: it pipes JSON to the module tool via stdin:
-#   node ./.securable/tools/prd_securability_enhance.js < <input-json-file>
-# and uses the top-level enhancedPrd field from the response as the effective PRD.
 #
 # OpenCode invocation:
 #   opencode run -f <prompt-file>
@@ -23,15 +19,12 @@
 #     aspnet/
 #       rawdog/     <- Plain OpenCode generation
 #       securable/  <- Generation with securable-opencode-module active
-#       fiassed/    <- securable + PRD enhancement workflow
 #     jsp/
 #       rawdog/
 #       securable/
-#       fiassed/
 #     node/
 #       rawdog/
 #       securable/
-#       fiassed/
 #
 # Usage:
 #   ./run-codegen-opencode.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume] [--modes <list>]
@@ -43,7 +36,7 @@
 #   --plugin-repo  Git URL of the securable-opencode-module (default: canonical repo)
 #   --dry-run      Print what would run without calling OpenCode
 #   --resume       Skip completed variations and preserve existing directories
-#   --modes        Comma-separated or repeated mode list (default: rawdog,securable,fiassed)
+#   --modes        Comma-separated or repeated mode list (default: rawdog,securable)
 #   --clean        Remove cached module clone and finished flags, then exit
 #   -h, --help     Show this help text
 #
@@ -53,7 +46,6 @@
 # Examples:
 #   ./run-codegen-opencode.sh --prd ./my-prd.md
 #   ./run-codegen-opencode.sh --prd ./my-prd.md --output-dir ~/tests/opencode --dry-run
-#   ./run-codegen-opencode.sh --prd ./my-prd.md --modes fiassed
 #   ./run-codegen-opencode.sh --prd ./my-prd.md --resume
 #   ./run-codegen-opencode.sh --clean --output-dir ~/tests/opencode
 # =============================================================================
@@ -97,19 +89,11 @@ declare -A LANG_LABELS=(
 declare -A MODE_IS_SECURABLE=(
     [rawdog]=false
     [securable]=true
-    [fiassed]=true
-)
-
-declare -A MODE_IS_FIASSED=(
-    [rawdog]=false
-    [securable]=false
-    [fiassed]=true
 )
 
 declare -A MODE_SUMMARY=(
     [rawdog]="plain OpenCode generation"
     [securable]="FIASSE/SSEM secured generation"
-    [fiassed]="FIASSE/SSEM secured generation with PRD securability enhancement"
 )
 
 # -----------------------------------------------------------------------------
@@ -143,7 +127,7 @@ done
 OUTPUT_DIR="$(realpath -m "$OUTPUT_DIR")"
 
 if [[ ${#MODES_INPUTS[@]} -eq 0 ]]; then
-    MODES_INPUTS=("rawdog" "securable" "fiassed")
+    MODES_INPUTS=("rawdog" "securable")
 fi
 
 MODES=()
@@ -155,7 +139,7 @@ for mode_arg in "${MODES_INPUTS[@]}"; do
         normalized="${normalized//[[:space:]]/}"
         [[ -z "$normalized" ]] && continue
         if [[ -z "${MODE_SUMMARY[$normalized]+x}" ]]; then
-            _red "Error: Unsupported mode '$normalized'. Available modes: rawdog, securable, fiassed"
+            _red "Error: Unsupported mode '$normalized'. Available modes: rawdog, securable"
             exit 1
         fi
         if [[ -z "${_seen_modes[$normalized]+x}" ]]; then
@@ -166,7 +150,7 @@ for mode_arg in "${MODES_INPUTS[@]}"; do
 done
 
 if [[ ${#MODES[@]} -eq 0 ]]; then
-    _red "Error: At least one mode must be provided via --modes. Available modes: rawdog, securable, fiassed"
+    _red "Error: At least one mode must be provided via --modes. Available modes: rawdog, securable"
     exit 1
 fi
 
@@ -320,112 +304,6 @@ Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all
 trust boundaries. Enforce the Derived Integrity Principle for business-critical
 values. Produce structured audit logging for all accountable actions.
 FALLBACK
-}
-
-# -----------------------------------------------------------------------------
-# resolve_fiassed_workflow_path  <module-source-dir>
-#
-# Resolves module assets required by fiassed mode.
-# -----------------------------------------------------------------------------
-resolve_fiassed_workflow_path() {
-    local src="$1"
-    local tool="$src/tools/prd_securability_enhance.js"
-    local mcp_server="$src/tools/mcp_server.js"
-
-    if [[ -f "$tool" && -f "$mcp_server" ]]; then
-        printf '%s|%s' "$tool" "$mcp_server"
-        return 0
-    fi
-
-    return 1
-}
-
-# -----------------------------------------------------------------------------
-# get_fiassed_prd_content  <working-dir>  <module-source-dir>  <label>  <input-prd-file>
-#
-# Pipes JSON to the module tool via stdin and prints the enhanced PRD markdown
-# to stdout.
-# -----------------------------------------------------------------------------
-get_fiassed_prd_content() {
-    local working_dir="$1"
-    local plugin_source="$2"
-    local label="$3"
-    local input_prd_file="$4"
-    local workflow_assets=""
-    local workflow_path=""
-    local tool_assets=""
-    local tool_path=""
-
-    if ! tool_assets="$(resolve_fiassed_workflow_path "$plugin_source")"; then
-        _red "Error: fiassed mode requires module assets tools/prd_securability_enhance.js and tools/mcp_server.js."
-        return 1
-    fi
-
-    IFS='|' read -r tool_path _mcp_server_path <<< "$tool_assets"
-
-    if [[ "$DRY_RUN" == true ]]; then
-        _yellow "  [DRY-RUN] Would enhance PRD via prd_securability_enhance tool for: $label" >&2
-        _yellow "  [DRY-RUN] Tool: $tool_path" >&2
-        cat "$input_prd_file"
-        return 0
-    fi
-
-    local tool_input_file
-    local enhance_log_file
-    local enhanced_prd_file
-    local enhanced_output
-    local exit_code
-    local parse_status
-
-    tool_input_file="$working_dir/fiassed-input.json"
-    enhance_log_file="$working_dir/opencode-prd-enhancement.log"
-    enhanced_prd_file="$working_dir/enhanced-prd.md"
-
-    # workspaceRoot points to .securable/ so the tool resolves data/asvs/ correctly.
-    # prdPath is absolute so path.resolve() in the tool returns it unchanged.
-    cat > "$tool_input_file" <<JSON
-{
-    "workspaceRoot": "$working_dir/.securable",
-    "prdPath": "$input_prd_file",
-    "asvsLevel": 2,
-    "maxRequirementsPerFeature": 6
-}
-JSON
-
-    write_step "Enhancing PRD via prd_securability_enhance tool for: $label"
-    _gray "  Tool       : $tool_path"
-    _gray "  Log file   : $enhance_log_file"
-
-    set +e
-    enhanced_output="$(
-        cd "$working_dir"
-        node "./.securable/tools/prd_securability_enhance.js" < "$tool_input_file" 2>&1 | tee "$enhance_log_file"
-    )"
-    exit_code=$?
-    set -e
-
-    if [[ $exit_code -ne 0 ]]; then
-        _red "Error: fiassed tool failed with exit code $exit_code for $label — check $enhance_log_file"
-        return 1
-    fi
-
-    if [[ -z "${enhanced_output//[[:space:]]/}" ]]; then
-        _red "Error: fiassed tool produced empty output for $label — check $enhance_log_file"
-        return 1
-    fi
-
-    set +e
-    enhanced_output="$(printf '%s' "$enhanced_output" | node -e "let raw='';process.stdin.on('data',d=>raw+=d);process.stdin.on('end',()=>{try{const j=JSON.parse(raw);if(!j.ok){const msg=(j.error&&j.error.message)||j.reason||'tool returned ok=false';process.stderr.write(msg);process.exit(2);}const prd=j.enhancedPrd;if(typeof prd!=='string'||!prd.trim()){process.stderr.write('missing enhancedPrd');process.exit(3);}process.stdout.write(prd);}catch(e){process.stderr.write('invalid tool JSON: '+e.message);process.exit(4);}});")"
-    parse_status=$?
-    set -e
-
-    if [[ $parse_status -ne 0 ]]; then
-        _red "Error: fiassed tool output parse failed for $label — check $enhance_log_file"
-        return 1
-    fi
-    _gray "  Enhanced PRD written: $enhanced_prd_file"
-
-    printf '%s' "$enhanced_output"
 }
 
 # -----------------------------------------------------------------------------
@@ -601,9 +479,6 @@ for lang_key in "${LANG_KEYS[@]}"; do
 FENCE
         fi
 
-        effective_prd_file="$(mktemp /tmp/opencode_effective_prd_XXXXXX.md)"
-        printf '%s\n' "$PRD_CONTENT" > "$effective_prd_file"
-
         if [[ "${MODE_IS_SECURABLE[$mode]}" == "false" ]]; then
             cat > "$PROMPT_TMP" <<PROMPT
 Generate a complete, working ${lang_label} project based on the following PRD.
@@ -617,7 +492,7 @@ current working directory. Only create this file after all required project file
 
 PRD:
 ---
-$(cat "$effective_prd_file")
+${PRD_CONTENT}
 ---
 PROMPT
 
@@ -625,15 +500,15 @@ PROMPT
             # Install module files so OpenCode auto-loads MCP server
             install_module "$PLUGIN_TEMP" "$target_dir"
 
-            # Ensure permissions are set before fiassed enhancement run
+            # Ensure permissions are set before generation run
             if [[ "$DRY_RUN" == false ]]; then
                 set_opencode_permissions "$target_dir"
             fi
 
-            if [[ "${MODE_IS_FIASSED[$mode]}" == "true" ]]; then
-                enhanced_prd_tmp="$(mktemp /tmp/opencode_effective_prd_enhanced_XXXXXX.md)"
-                get_fiassed_prd_content "$target_dir" "$PLUGIN_TEMP" "$lang_key / $mode" "$effective_prd_file" > "$enhanced_prd_tmp"
-                mv "$enhanced_prd_tmp" "$effective_prd_file"
+            if [[ "$DRY_RUN" == true ]]; then
+                _yellow "  [DRY-RUN] Would dispatch securable command: secure-generate"
+            else
+                _gray "  Dispatching securable command: secure-generate"
             fi
 
             cat > "$PROMPT_TMP" <<PROMPT
@@ -641,6 +516,8 @@ You are operating with the securable-opencode-module active (.securable/ directo
 and opencode.json are present in this directory). The module tools and workflows are
 available, including fiasse_lookup, securability_review, secure_generate, and
 prd_securability_enhance.
+
+Execute secure-generate and use it as the authoritative generation workflow.
 
 The following securability engineering instructions are your primary
 constraints — treat them as non-negotiable design requirements.
@@ -664,12 +541,10 @@ current working directory. Only create this file after all required project file
 
 PRD:
 ---
-$(cat "$effective_prd_file")
+${PRD_CONTENT}
 ---
 PROMPT
         fi
-
-        rm -f "$effective_prd_file"
 
         # Ensure OpenCode has write permissions
         if [[ "$DRY_RUN" == false ]]; then

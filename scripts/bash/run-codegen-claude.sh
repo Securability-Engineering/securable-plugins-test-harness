@@ -3,14 +3,13 @@
 # run-codegen-claude.sh
 #
 # Automates Claude Code CLI to generate a project from a PRD in 3 languages,
-# each with a selectable generation mode such as rawdog, securable, or fiassed.
+# each with a selectable generation mode such as rawdog or securable.
 #
 # Output structure:
 #   <output-dir>/
 #     aspnet/
 #       rawdog/     <- Plain Claude Code generation
 #       securable/  <- Generation with securable-claude-plugin active
-#       fiassed/    <- securable + PRD enhancement play
 #     jsp/
 #       rawdog/
 #       securable/
@@ -38,7 +37,6 @@
 # Examples:
 #   ./run-codegen-claude.sh --prd ./my-prd.md
 #   ./run-codegen-claude.sh --prd ./my-prd.md --output-dir ~/projects/codegen --dry-run
-#   ./run-codegen-claude.sh --prd ./my-prd.md --modes fiassed
 #   ./run-codegen-claude.sh --prd ./my-prd.md --resume
 #   ./run-codegen-claude.sh --clean --output-dir ~/projects/codegen
 # =============================================================================
@@ -83,19 +81,11 @@ declare -A LANG_LABELS=(
 declare -A MODE_IS_SECURABLE=(
     [rawdog]=false
     [securable]=true
-    [fiassed]=true
-)
-
-declare -A MODE_IS_FIASSED=(
-    [rawdog]=false
-    [securable]=false
-    [fiassed]=true
 )
 
 declare -A MODE_SUMMARY=(
     [rawdog]="plain generation"
     [securable]="FIASSE/SSEM secured generation"
-    [fiassed]="FIASSE/SSEM secured generation with PRD play enhancement"
 )
 
 # -----------------------------------------------------------------------------
@@ -141,7 +131,7 @@ for mode_arg in "${MODES_INPUTS[@]}"; do
         normalized="${normalized//[[:space:]]/}"
         [[ -z "$normalized" ]] && continue
         if [[ -z "${MODE_SUMMARY[$normalized]+x}" ]]; then
-            _red "Error: Unsupported mode '$normalized'. Available modes: rawdog, securable, fiassed"
+            _red "Error: Unsupported mode '$normalized'. Available modes: rawdog, securable"
             exit 1
         fi
         if [[ -z "${_seen_modes[$normalized]+x}" ]]; then
@@ -152,7 +142,7 @@ for mode_arg in "${MODES_INPUTS[@]}"; do
 done
 
 if [[ ${#MODES[@]} -eq 0 ]]; then
-    _red "Error: At least one mode must be provided via --modes. Available modes: rawdog, securable, fiassed"
+    _red "Error: At least one mode must be provided via --modes. Available modes: rawdog, securable"
     exit 1
 fi
 
@@ -268,73 +258,6 @@ Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all
 trust boundaries. Enforce the Derived Integrity Principle for business-critical
 values. Produce structured audit logging for all accountable actions.
 FALLBACK
-}
-
-get_fiassed_prd_content() {
-    local working_dir="$1"
-    local plugin_source="$2"
-    local original_prd_content="$3"
-    local label="$4"
-
-    if [[ "$DRY_RUN" == true ]]; then
-        _yellow "  [DRY-RUN] Would enhance PRD via fiassed play for: $label" >&2
-        printf '%s' "$original_prd_content"
-        return 0
-    fi
-
-    local play_path=""
-    for candidate in \
-        "$plugin_source/plays/requirements-analysis/prd-fiasse-asvs-enhancement.md" \
-        "$plugin_source/plays/requirements-analysis/prd-fiasse-asvs-enhansement.md"
-    do
-        if [[ -f "$candidate" ]]; then
-            play_path="$candidate"
-            break
-        fi
-    done
-
-    if [[ -z "$play_path" ]]; then
-        _red "Error: fiassed mode requires prd-fiasse-asvs-enhancement.md under plays/requirements-analysis"
-        exit 1
-    fi
-
-    local enhance_prompt_file
-    enhance_prompt_file="$(mktemp /tmp/claude_prd_enhance_XXXXXX.txt)"
-    local enhance_log_file="$working_dir/claude-prd-enhancement.log"
-    local enhanced_prd_file="$working_dir/enhanced-prd.md"
-
-    cat > "$enhance_prompt_file" <<PROMPT
-Run the following play exactly to enhance the provided PRD.
-
-Output requirements:
-- Return ONLY the enhanced PRD markdown
-- Do not wrap in code fences
-- Do not add explanations before or after
-
-=== PLAY: prd-fiasse-asvs-enhancement ===
-$(cat "$play_path")
-=== END PLAY ===
-
-=== INPUT PRD ===
-${original_prd_content}
-=== END INPUT PRD ===
-PROMPT
-
-    write_step "Enhancing PRD via fiassed play for: $label" >&2
-    local enhanced_content
-    if ! enhanced_content="$(
-        cd "$working_dir"
-        claude --print --permission-mode bypassPermissions < "$enhance_prompt_file" 2>&1 | tee "$enhance_log_file"
-    )"; then
-        rm -f "$enhance_prompt_file"
-        _red "Error: Claude PRD enhancement failed for $label. Check $enhance_log_file"
-        exit 1
-    fi
-
-    rm -f "$enhance_prompt_file"
-    printf '%s' "$enhanced_content" > "$enhanced_prd_file"
-    _gray "  Enhanced PRD written: $enhanced_prd_file" >&2
-    printf '%s' "$enhanced_content"
 }
 
 # -----------------------------------------------------------------------------
@@ -499,13 +422,19 @@ PROMPT
             # Securable — install plugin files, then embed instructions in prompt
             install_plugin "$PLUGIN_TEMP" "$target_dir"
 
-            if [[ "${MODE_IS_FIASSED[$mode]}" == true ]]; then
-                effective_prd_content="$(get_fiassed_prd_content "$target_dir" "$PLUGIN_TEMP" "$PRD_CONTENT" "$lang_key / $mode")"
+            if [[ "$DRY_RUN" == true ]]; then
+                _yellow "  [DRY-RUN] Would dispatch securable play: code-generation/securable-generation"
+            else
+                _gray "  Dispatching securable play: code-generation/securable-generation"
             fi
 
             cat > "$PROMPT_TMP" <<PROMPT
 You are operating with the securable-claude-plugin active (CLAUDE.md and
 .claude/commands/ are present in this directory).
+
+Execute the plugin play 
+code-generation/securable-generation
+and use it as an authoritative workflow for this generation.
 
 The following securability engineering instructions are your primary
 constraints — treat them as non-negotiable design requirements.

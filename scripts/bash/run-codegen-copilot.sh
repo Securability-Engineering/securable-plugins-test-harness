@@ -416,8 +416,15 @@ PROMPT
         else
             install_plugin "$PLUGIN_TEMP" "$target_dir"
 
+            if [[ "$DRY_RUN" == true ]]; then
+                _yellow "  [DRY-RUN] Would dispatch securable agent: securability-engineer"
+            else
+                _gray "  Dispatching securable agent: securability-engineer"
+            fi
+
             cat > "$PROMPT_TMP" <<PROMPT
 You are operating with the securable-copilot FIASSE plugin active.
+Use the securability-engineer agent explicitly for this securable run.
 The following securability engineering instructions and prompts are your
 primary constraints — treat them as non-negotiable design requirements,
 not optional guidelines.
