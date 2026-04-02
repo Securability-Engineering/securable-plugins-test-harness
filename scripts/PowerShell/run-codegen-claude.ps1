@@ -76,7 +76,7 @@ param(
     [string[]]$Modes = @("rawdog", "securable"),
 
     [ValidateCount(1, 32)]
-    [string[]]$Languages = @("aspnet", "jsp", "node", "ts"),
+    [string[]]$Languages = @("aspnet", "ts"),
 
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
