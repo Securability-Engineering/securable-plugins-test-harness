@@ -198,7 +198,7 @@ function Invoke-Claude {
 
     Push-Location $WorkingDir
     try {
-        $claudeArgs = @("--print", "--permission-mode", "bypassPermissions")
+        $claudeArgs = @("--print", "--permission-mode", "bypassPermissions") # --permission-mode bypassPermissions
         if ($PluginDir) {
             $claudeArgs += @("--plugin-dir", $PluginDir)
         }
@@ -208,6 +208,35 @@ function Invoke-Claude {
         $Prompt | & claude @claudeArgs 2>&1 | Tee-Object -FilePath $logFile
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Claude exited with code $LASTEXITCODE for $Label - check $logFile"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Helper: Clear Claude CLI cache before each run for stricter isolation.
+# ---------------------------------------------------------------------------
+function Clear-ClaudeCache {
+    param(
+        [string]$WorkingDir,
+        [string]$Label
+    )
+
+    if ($DryRun) {
+        Write-Host "  [DRY-RUN] Would run in: $WorkingDir" -ForegroundColor Yellow
+        Write-Host "  [DRY-RUN] claude --clear-cache (for $Label)" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "  Clearing Claude cache for: $Label" -ForegroundColor DarkGray
+
+    Push-Location $WorkingDir
+    try {
+        & claude --clear-cache 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "claude --clear-cache exited with code $LASTEXITCODE for $Label"
         }
     }
     finally {
@@ -468,7 +497,8 @@ foreach ($langKey in $SelectedLanguages) {
         if (-not $DryRun) {
             Set-ClaudeWritePermissions -TargetDir $targetDir
         }
-        
+
+        Clear-ClaudeCache -WorkingDir $targetDir -Label $label        
         Invoke-Claude -WorkingDir $targetDir -Prompt $prompt -Label $label -PluginDir $pluginDirForMode
     }
 }
