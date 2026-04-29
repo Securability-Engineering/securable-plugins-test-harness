@@ -198,45 +198,17 @@ function Invoke-Claude {
 
     Push-Location $WorkingDir
     try {
-        $claudeArgs = @("--print", "--permission-mode", "bypassPermissions") # --permission-mode bypassPermissions
+        $claudeArgs = @("--print", "--permission-mode", "bypassPermissions", "--no-session-persistence")
         if ($PluginDir) {
             $claudeArgs += @("--plugin-dir", $PluginDir)
         }
 
         # Pipe the prompt via stdin; --print keeps Claude non-interactive.
         # bypassPermissions prevents interactive write approval prompts.
+        # --no-session-persistence keeps each run isolated from prior sessions.
         $Prompt | & claude @claudeArgs 2>&1 | Tee-Object -FilePath $logFile
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Claude exited with code $LASTEXITCODE for $Label - check $logFile"
-        }
-    }
-    finally {
-        Pop-Location
-    }
-}
-
-# ---------------------------------------------------------------------------
-# Helper: Clear Claude CLI cache before each run for stricter isolation.
-# ---------------------------------------------------------------------------
-function Clear-ClaudeCache {
-    param(
-        [string]$WorkingDir,
-        [string]$Label
-    )
-
-    if ($DryRun) {
-        Write-Host "  [DRY-RUN] Would run in: $WorkingDir" -ForegroundColor Yellow
-        Write-Host "  [DRY-RUN] claude --clear-cache (for $Label)" -ForegroundColor Yellow
-        return
-    }
-
-    Write-Host "  Clearing Claude cache for: $Label" -ForegroundColor DarkGray
-
-    Push-Location $WorkingDir
-    try {
-        & claude --clear-cache 2>&1 | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "claude --clear-cache exited with code $LASTEXITCODE for $Label"
         }
     }
     finally {
@@ -471,7 +443,7 @@ foreach ($langKey in $SelectedLanguages) {
                 "Use the active plugin constraints while generating the project.",
                 "Execute the plugin play code-generation/securable-generation and use it as the authoritative workflow for this generation.",
                 "",
-                "Generate a complete, working $langLabel project based on the following PRD,",
+                "Generate a complete end-to-end securable code, a working $langLabel project with scoring evidence based on the following PRD,",
                 "applying the active plugin's FIASSE/SSEM constraints throughout the generated code.",
                 "",
                 "Create all necessary source files, configuration files, and folder structure",
@@ -498,7 +470,6 @@ foreach ($langKey in $SelectedLanguages) {
             Set-ClaudeWritePermissions -TargetDir $targetDir
         }
 
-        Clear-ClaudeCache -WorkingDir $targetDir -Label $label        
         Invoke-Claude -WorkingDir $targetDir -Prompt $prompt -Label $label -PluginDir $pluginDirForMode
     }
 }
